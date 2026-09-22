@@ -89,3 +89,17 @@ export const triggerHaptic = (type: 'selection' | 'success' | 'impact') => {
     }
   }
 };
+
+// Simple wrapper to alert the user of a session/action conflict (e.g. same
+// account used from another device/window). Falls back to a native alert
+// when the Telegram WebApp SDK isn't available.
+export const alertAction = async (message: string): Promise<void> => {
+  try {
+    const tg = (window as any)?.Telegram?.WebApp;
+    if (tg && typeof tg.showAlert === 'function') {
+      tg.showAlert(message);
+      return;
+    }
+  } catch {}
+  alert(message);
+};
