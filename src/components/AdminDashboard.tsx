@@ -306,7 +306,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
             <span>Admin Control Center</span>
           </div>
           <h1 className="text-2xl font-bold text-slate-100">
-            U JO Resident Administration
+            U JO TAJNEED Administration
           </h1>
           <p className="text-xs text-slate-400 max-w-xl">
             Review manual payment activations, manage user subscriptions, inspect usage stats, and update system parameters.
