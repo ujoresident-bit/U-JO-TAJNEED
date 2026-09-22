@@ -9,6 +9,7 @@ import { ProgressView } from './components/ProgressView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { FlashcardsView } from './components/FlashcardsView';
 import { ContentProtection } from './components/ContentProtection';
+import { CinematicIntro } from './components/CinematicIntro';
 import { initTelegramSdk } from './services/telegram';
 import { getCurrentUser, checkAccountActiveStatus } from './services/authService';
 import { syncQuestionsWithSupabase, syncBlocksFromSupabase } from './services/questionBankService';
@@ -20,6 +21,10 @@ export default function App() {
   const [viewParams, setViewParams] = useState<any>({});
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [isAccountInactive, setIsAccountInactive] = useState<boolean>(false);
+  // Non-skippable, plays fully on every fresh page load — no
+  // sessionStorage persistence, matching the exact behavior established
+  // for U JO Resident's own intro.
+  const [showIntro, setShowIntro] = useState<boolean>(true);
 
   useEffect(() => {
     initTelegramSdk();
@@ -48,6 +53,10 @@ export default function App() {
   const handleRefreshData = () => {
     setRefreshKey((prev) => prev + 1);
   };
+
+  if (showIntro) {
+    return <CinematicIntro onComplete={() => setShowIntro(false)} />;
+  }
 
   if (isAccountInactive) {
     return (
@@ -95,7 +104,7 @@ export default function App() {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
           {currentView === 'home' && <HomeView onNavigate={handleNavigate} />}
 
-          {currentView === 'bank' && <QuestionBankView onNavigate={handleNavigate} />}
+          {currentView === 'bank' && <QuestionBankView onNavigate={handleNavigate} bankId={viewParams.bankId} />}
 
           {currentView === 'question_screen' && (
             <QuestionScreen
@@ -106,7 +115,7 @@ export default function App() {
           )}
 
           {currentView === 'subscription' && (
-            <SubscriptionView onNavigate={handleNavigate} onRefreshData={handleRefreshData} />
+            <SubscriptionView onNavigate={handleNavigate} onRefreshData={handleRefreshData} bankId={viewParams.bankId} />
           )}
 
           {currentView === 'progress' && <ProgressView onNavigate={handleNavigate} />}
