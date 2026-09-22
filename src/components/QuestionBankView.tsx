@@ -42,9 +42,10 @@ import { BlockFilters, QuestionStatusFilter, Question } from '../types';
 
 interface QuestionBankViewProps {
   onNavigate: (view: string, params?: any) => void;
+  bankId?: string;
 }
 
-export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }) => {
+export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, bankId = 'human_medicine' }) => {
   const canonicalUser = getCurrentUser();
   const [currentSession, setCurrentSession] = useState(() => resolveSession(canonicalUser.telegramId));
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
@@ -81,8 +82,11 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
           return;
         }
 
-        // 2. Authoritative API call to verify active subscription
-        const subObj = await syncSubscriptionFromSupabase(tgId, username);
+        // 2. Authoritative API call to verify active subscription for
+        // THIS SPECIFIC BANK — Human Medicine and Dentistry each require
+        // their own separate subscription, so a user subscribed to one
+        // must never be treated as subscribed to the other.
+        const subObj = await syncSubscriptionFromSupabase(tgId, username, bankId);
         const refreshedSession = resolveSession(tgId);
 
         const active = Boolean(
@@ -129,19 +133,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
     };
   }, [canonicalUser.telegramId]);
 
-  const [questions, setQuestions] = useState<Question[]>(getStoredQuestions());
+  const [questions, setQuestions] = useState<Question[]>(() => getStoredQuestions().filter((q) => q.bankId === bankId));
 
   useEffect(() => {
     syncQuestionsWithSupabase()
       .then((synced) => {
         if (synced && synced.length > 0) {
-          setQuestions(synced);
+          setQuestions(synced.filter((q) => q.bankId === bankId));
         }
       })
       .catch(() => {});
-  }, []);
+  }, [bankId]);
 
-  const bankMeta = getQuestionBankMeta();
+  const bankMeta = getQuestionBankMeta(bankId);
   const allQuestions = questions;
 
   // Filter States
@@ -252,8 +256,9 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
       topics: selectedTopics.includes('All') ? undefined : selectedTopics,
       years: selectedYears.length > 0 ? selectedYears : undefined,
       difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
+      bankId,
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty]
+    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty, bankId]
   );
 
   // Questions matching non-status criteria (used for card totals)
@@ -277,9 +282,10 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
       difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
       questionCount,
       statusFilter: selectedStatusFilter,
-      userId: user.telegramId
+      userId: user.telegramId,
+      bankId
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty, questionCount, selectedStatusFilter, user.telegramId]
+    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty, questionCount, selectedStatusFilter, user.telegramId, bankId]
   );
 
   // Active question pool matching ALL filters (including status filter)
@@ -297,12 +303,13 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
         years: selectedYears.length > 0 ? selectedYears : undefined,
         difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
         statusFilter: selectedStatusFilter,
-        userId: user.telegramId
+        userId: user.telegramId,
+        bankId
       }).length;
       counts[m.name] = count;
     });
     return counts;
-  }, [bankMeta.majors, selectedTopics, selectedYears, selectedDifficulty, selectedStatusFilter, user.telegramId]);
+  }, [bankMeta.majors, selectedTopics, selectedYears, selectedDifficulty, selectedStatusFilter, user.telegramId, bankId]);
 
   // Compute dynamic Topic Question Counts respecting active Status, Major, Year, Difficulty filters
   const topicQuestionCounts = useMemo(() => {
@@ -314,7 +321,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
         years: selectedYears.length > 0 ? selectedYears : undefined,
         difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
         statusFilter: selectedStatusFilter,
-        userId: user.telegramId
+        userId: user.telegramId,
+        bankId
       }).length;
       counts[tName] = count;
     });
@@ -394,7 +402,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
     }
 
     try {
-      const newBlock = await startBlock(tgId, currentFilters);
+      const newBlock = await startBlock(tgId, currentFilters, bankId);
       console.log('[Start Question Diagnostic - Block Started Successfully]', { blockId: newBlock.id });
       onNavigate('question_screen', { blockId: newBlock.id });
     } catch (err: any) {
@@ -727,7 +735,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
                 Checking Subscription Status...
               </h3>
               <p className="text-xs text-slate-400">
-                Verifying your MOH Residency Pass with the subscription database...
+                Verifying your U JO TAJNEED Pass with the subscription database...
               </p>
             </div>
           </div>
@@ -754,18 +762,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate }
               </h3>
               <p className="text-xs text-slate-400 max-w-lg">
                 {session.subscriptionStatus === 'EXPIRED'
-                  ? 'Your MOH Residency Pass has expired. Please renew your subscription to resume creating and solving test blocks.'
-                  : 'You can configure filter criteria, but an active MOH Residency Pass is required to start solving blocks.'}
+                  ? 'Your U JO TAJNEED Pass for this bank has expired. Please renew your subscription to resume creating and solving test blocks.'
+                  : 'You can configure filter criteria, but an active U JO TAJNEED Pass for this specific bank is required to start solving blocks.'}
               </p>
             </div>
           </div>
 
           <button
-            onClick={() => onNavigate('subscription')}
+            onClick={() => onNavigate('subscription', { bankId })}
             className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 shrink-0 cursor-pointer"
           >
             <CreditCard className="w-4 h-4" />
-            <span>{session.subscriptionStatus === 'EXPIRED' ? 'Renew MOH Pass' : 'Get MOH Pass'}</span>
+            <span>{session.subscriptionStatus === 'EXPIRED' ? 'Renew Pass' : 'Subscribe to This Bank'}</span>
           </button>
         </div>
       )}
