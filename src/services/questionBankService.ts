@@ -10,12 +10,13 @@ import {
   ImportPreviewResult,
   InvalidQuestionError
 } from '../types';
-import { DEMO_QUESTIONS, MOH_BANK_META, DEMO_QUESTION_STATS } from './demoData';
+import { DEMO_QUESTIONS, MOH_BANK_META, USMLE_BANK_META, DEMO_QUESTION_STATS } from './demoData';
 import { getSubscriptionStatus, syncSubscriptionFromSupabase } from './subscriptionService';
 import { verifyTelegramAdminAuthorization, getCanonicalTelegramUser, getCurrentUser } from './authService';
 import { syncQuestionProgressToSupabase } from './progressService';
+import { alertAction } from './telegram';
 
-const BANK_ID = 'moh_bank';
+const BANK_ID = 'human_medicine';
 const BLOCKS_STORAGE_KEY = 'ujo_blocks_v1';
 const QUESTIONS_STORAGE_KEY = 'ujo_questions_prod_v1';
 const IMPORT_BATCHES_STORAGE_KEY = 'ujo_import_batches_v1';
@@ -192,14 +193,29 @@ const saveStoredBlocks = (blocks: Record<string, Block>) => {
   }
 };
 
+// Registry of known question banks. Adding a new bank is just adding an
+// entry here plus its meta object — every screen (classification, exam,
+// admin import/management) already reads bank identity generically via
+// bankId, so nothing else needs bank-specific code.
+const BANK_META_REGISTRY: Record<string, QuestionBankMeta> = {
+  human_medicine: MOH_BANK_META,
+  dentistry: USMLE_BANK_META
+};
+
 export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta => {
-  const questions = getStoredQuestions().filter((q) => !bankId || q.bankId === bankId || bankId === 'moh_bank');
-  
+  const baseMeta = BANK_META_REGISTRY[bankId] || MOH_BANK_META;
+  // ROOT CAUSE FIX: previously matched every question regardless of its
+  // actual bankId whenever bankId==='human_medicine' (an escape-hatch that made
+  // sense when only one bank existed), which would incorrectly mix a
+  // second bank's questions into this one's counts/topic breakdown. Now
+  // strictly filters to questions actually belonging to this bank.
+  const questions = getStoredQuestions().filter((q) => q.bankId === bankId);
+
   // Calculate dynamic meta counts from stored questions
   const totalQuestions = questions.length;
   const yearsAvailable = Array.from(new Set(questions.map((q) => q.year))).sort((a, b) => a - b);
   if (yearsAvailable.length === 0) {
-    yearsAvailable.push(...MOH_BANK_META.yearsAvailable);
+    yearsAvailable.push(...baseMeta.yearsAvailable);
   }
 
   // Calculate dynamic majors & sub-topics breakdown from actual stored questions
@@ -224,7 +240,7 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
   }));
 
   return {
-    ...MOH_BANK_META,
+    ...baseMeta,
     totalQuestions,
     yearsAvailable,
     majors
@@ -263,7 +279,15 @@ export const getUserQuestionStatusSets = (userId?: string): { answeredQuestionId
 };
 
 export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
-  const allQuestions = getStoredQuestions();
+  // ROOT CAUSE FIX: this previously pulled from ALL stored questions across
+  // every bank with zero bank-awareness — the classification/topic browser
+  // screen was correctly scoped per bank for display, but the actual exam
+  // block (the real set of questions a student answers) was built from the
+  // entire combined pool regardless of which bank the student opened,
+  // silently mixing U JO MOH and U JO MAJORS QBANK questions together.
+  const allQuestions = getStoredQuestions().filter(
+    (q) => !filters.bankId || q.bankId === filters.bankId
+  );
 
   let answeredSet: Set<string> | null = null;
   let encounteredSet: Set<string> | null = null;
@@ -329,18 +353,92 @@ export const getQuestionById = (questionId: string): Question | null => {
 // ADMIN QUESTION BANK IMPORT & MANAGEMENT
 // ==========================================
 
+// Cleans common LaTeX/math markup artifacts that appear when clinical
+// vignette text is copy-pasted from a PDF, Word equation, or LaTeX-rendered
+// source (e.g. "\(101.1^{\circ}\mathrm{F}\)" instead of a readable
+// "101.1°F"). Applied to the ENTIRE pasted batch before parsing, so both
+// the MOH and USMLE text-import paths automatically benefit — students
+// never see raw markup on the exam screen. Deliberately conservative: it
+// only strips/replaces markup syntax itself, never touches the actual
+// medical wording, numbers, or meaning of the content.
+export const cleanLatexArtifacts = (text: string): string => {
+  if (!text) return text;
+  let cleaned = text;
+
+  // Unwrap \( ... \) and \[ ... \] math-mode delimiters (keep the content)
+  cleaned = cleaned.replace(/\\\(/g, '').replace(/\\\)/g, '');
+  cleaned = cleaned.replace(/\\\[/g, '').replace(/\\\]/g, '');
+
+  // Unwrap \mathrm{X}, \text{X}, \mathbf{X} -> X (repeat for nested cases)
+  for (let i = 0; i < 3; i++) {
+    cleaned = cleaned.replace(/\\(?:mathrm|text|mathbf|mathit)\{([^{}]*)\}/g, '$1');
+  }
+
+  // Degree symbol: ^{\circ} or ^\circ -> °
+  cleaned = cleaned.replace(/\^\{\\circ\}/g, '°').replace(/\^\\circ/g, '°');
+
+  // Common math operators/symbols
+  cleaned = cleaned
+    .replace(/\\times/g, '×')
+    .replace(/\\leq/g, '≤')
+    .replace(/\\geq/g, '≥')
+    .replace(/\\pm/g, '±')
+    .replace(/\\beta/g, 'β')
+    .replace(/\\alpha/g, 'α')
+    .replace(/\\gamma/g, 'γ')
+    .replace(/\\mu/g, 'μ')
+    .replace(/\\%/g, '%')
+    .replace(/\\infty/g, '∞');
+
+  // Subscripts/superscripts: strip the LaTeX wrapper but keep the number/
+  // letter itself (e.g. "V_{1}" -> "V1", "10^{3}" -> "10^3" -> "10³" for
+  // common small exponents, else just drop the braces).
+  cleaned = cleaned.replace(/_\{([^{}]+)\}/g, '$1');
+  cleaned = cleaned.replace(/\^\{([^{}]+)\}/g, '$1');
+
+  // LaTeX non-breaking space (~) and stray backslash-space -> normal space
+  cleaned = cleaned.replace(/~/g, ' ').replace(/\\\s/g, ' ');
+
+  // Remove any remaining bare LaTeX command backslashes we didn't
+  // explicitly handle (e.g. "\mathrm" left without braces) — conservative,
+  // only strips the backslash+word, never surrounding text.
+  cleaned = cleaned.replace(/\\[a-zA-Z]+/g, '');
+
+  // Collapse now-redundant whitespace left behind by the replacements
+  // above (e.g. "101.1  °F" -> "101.1 °F"), without touching intentional
+  // paragraph breaks (newlines are preserved).
+  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ');
+  cleaned = cleaned.replace(/[ \t]+([.,;:!?])/g, '$1');
+
+  return cleaned;
+};
+
 // Helper function to parse raw text format questions (Q. / A. / B. / C. / D. / Answer: / Explanation:)
 export const parseTextQuestions = (content: string): any[] => {
   if (!content || typeof content !== 'string') return [];
 
-  // Normalize line endings
-  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Normalize line endings and strip LaTeX/math markup artifacts up front
+  // so every downstream step (stem, options, explanation) works with clean,
+  // readable text — this is the single place both bank types' text-import
+  // paths funnel through.
+  const normalized = cleanLatexArtifacts(content.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
   const lines = normalized.split('\n');
 
   const isQuestionStart = (line: string): boolean => {
     const trimmed = line.trim();
     if (!trimmed) return false;
-    return /^(?:Q\s*[\.\:\-]|Q\s*\d+[\.\:\-]?|\d+[\.\)]\s*Q[\.\:]?|Question\s*\d*[\.\:\-]?|\[Q?\d+\]|\d+[\.\)])/i.test(trimmed);
+    // ROOT CAUSE FIX: the bare `\d+[\.\)]` fallback below used to match ANY
+    // line starting with digits followed by a period or closing paren —
+    // completely independent of any "Q" context. Pasted clinical vignette
+    // text often has vital-sign values broken onto their own line as an
+    // extraction artifact (e.g. a standalone "0.50" line from "0.50ng/mL"),
+    // which would falsely register as a new question boundary mid-document
+    // and corrupt or drop surrounding questions. The bare-digit fallback is
+    // removed entirely — every supported input format already requires an
+    // explicit "Q" marker (Q:, Q1., Question 1:, [Q1]) or a numbered-list
+    // style "12) Q:" — a lone "12)" or "0.50" with no Q-context is never a
+    // genuine question start.
+    return /^(?:Q\s*[\.\:\-]|Q\s*\d+[\.\:\-]?|\d+[\.\)]\s*Q[\.\:]?|Question\s*\d*[\.\:\-]?|\[Q?\d+\])/i.test(trimmed);
   };
 
   const isOptionA = (line: string): boolean => {
@@ -376,50 +474,76 @@ export const parseTextQuestions = (content: string): any[] => {
   for (const block of rawBlocks) {
     if (!block.trim()) continue;
 
-    // Look for Option A, B, C, D markers
+    // Look for Option A through E markers — only A and B are mandatory.
+    // Some genuinely valid exam questions have as few as 2-3 options
+    // (True/False, 3-choice questions), and requiring exactly 4 used to
+    // silently drop every one of them.
     const optAMatch = block.match(/(?:^|\n)\s*(?:A[\.\:\)\-]|\[A\]|\(A\))\s*/i);
     const optBMatch = block.match(/(?:^|\n)\s*(?:B[\.\:\)\-]|\[B\]|\(B\))\s*/i);
     const optCMatch = block.match(/(?:^|\n)\s*(?:C[\.\:\)\-]|\[C\]|\(C\))\s*/i);
     const optDMatch = block.match(/(?:^|\n)\s*(?:D[\.\:\)\-]|\[D\]|\(D\))\s*/i);
+    const optEMatch = block.match(/(?:^|\n)\s*(?:E[\.\:\)\-]|\[E\]|\(E\))\s*/i);
 
-    if (!optAMatch || !optBMatch || !optCMatch || !optDMatch) {
+    if (!optAMatch || !optBMatch) {
       continue;
     }
 
     const posA = optAMatch.index!;
     const posB = optBMatch.index!;
-    const posC = optCMatch.index!;
-    const posD = optDMatch.index!;
+    if (posA >= posB) continue;
 
-    if (posA >= posB || posB >= posC || posC >= posD) {
-      continue;
-    }
+    // Each subsequent option marker is only accepted if it exists AND
+    // comes strictly after the previous one — this both supports fewer
+    // than 4 options and guards against a stray "(C)"-shaped fragment
+    // appearing earlier in the stem/explanation from being misread as an
+    // option marker out of order.
+    const posC = optCMatch && optCMatch.index! > posB ? optCMatch.index! : -1;
+    const posD = optDMatch && posC !== -1 && optDMatch.index! > posC ? optDMatch.index! : -1;
+    const posE = optEMatch && posD !== -1 && optEMatch.index! > posD ? optEMatch.index! : -1;
+
+    // Ordered list of option positions actually present, used to compute
+    // where each option's text ends (at the next present option, or at
+    // Answer/Explanation for the last one).
+    const optionPositions: { key: 'A' | 'B' | 'C' | 'D' | 'E'; pos: number; matchLen: number }[] = [
+      { key: 'A', pos: posA, matchLen: optAMatch[0].length },
+      { key: 'B', pos: posB, matchLen: optBMatch[0].length }
+    ];
+    if (posC !== -1) optionPositions.push({ key: 'C', pos: posC, matchLen: optCMatch![0].length });
+    if (posD !== -1) optionPositions.push({ key: 'D', pos: posD, matchLen: optDMatch![0].length });
+    if (posE !== -1) optionPositions.push({ key: 'E', pos: posE, matchLen: optEMatch![0].length });
 
     // Extract Question Stem (everything before Option A)
     let stem = block.substring(0, posA).trim();
     stem = stem.replace(/^(?:\s*Q\s*[\.\:\-]|Q\s*\d+[\.\:\-]?|\d+[\.\)]\s*Q[\.\:]?|Question\s*\d*[\.\:\-]?|\[Q?\d+\]|\d+[\.\)])\s*/i, '').trim();
 
-    // Option A
-    const textA = block.substring(posA + optAMatch[0].length, posB).trim();
-
-    // Option B
-    const textB = block.substring(posB + optBMatch[0].length, posC).trim();
-
-    // Option C
-    const textC = block.substring(posC + optCMatch[0].length, posD).trim();
-
-    // Answer and Explanation markers after D
-    const ansMatch = block.match(/(?:^|\n)\s*(?:Answer|Ans|Correct\s*Answer|Correct)\s*[\:\=\-]?\s*\[?\(?([A-Da-d])\)?\]?/i);
+    // Answer and Explanation markers — searched for across the whole block;
+    // whichever comes first after the LAST present option is what actually
+    // terminates that last option's text.
+    const validAnswerLetters = optionPositions.map((o) => o.key).join('');
+    const ansMatch = block.match(
+      new RegExp(`(?:^|\\n)\\s*(?:Answer|Ans|Correct\\s*Answer|Correct)\\s*[\\:\\=\\-]?\\s*\\[?\\(?([${validAnswerLetters}])\\)?\\]?`, 'i')
+    );
     const expMatch = block.match(/(?:^|\n)\s*(?:Explanation|Exp|Rationale|Discussion)\s*[\:\=\-]?\s*/i);
 
     const posAns = ansMatch ? ansMatch.index! : -1;
     const posExp = expMatch ? expMatch.index! : -1;
 
-    let endDPos = block.length;
-    if (posAns > posD) endDPos = Math.min(endDPos, posAns);
-    if (posExp > posD) endDPos = Math.min(endDPos, posExp);
-
-    const textD = block.substring(posD + optDMatch[0].length, endDPos).trim();
+    // Extract each present option's text, ending at the next present
+    // option, or — for the last one — at Answer/Explanation/end of block.
+    const optionTexts: Partial<Record<'A' | 'B' | 'C' | 'D' | 'E', string>> = {};
+    for (let i = 0; i < optionPositions.length; i++) {
+      const current = optionPositions[i];
+      const next = optionPositions[i + 1];
+      let endPos: number;
+      if (next) {
+        endPos = next.pos;
+      } else {
+        endPos = block.length;
+        if (posAns > current.pos) endPos = Math.min(endPos, posAns);
+        if (posExp > current.pos) endPos = Math.min(endPos, posExp);
+      }
+      optionTexts[current.key] = block.substring(current.pos + current.matchLen, endPos).trim();
+    }
 
     const answerLetter = ansMatch ? ansMatch[1].toUpperCase() : '';
 
@@ -431,17 +555,30 @@ export const parseTextQuestions = (content: string): any[] => {
       } else {
         explanationText = block.substring(expStart).trim();
       }
+    } else if (ansMatch && posAns > -1) {
+      // FALLBACK: some pasted formats never include the literal word
+      // "Explanation" at all — the rationale text (including any "(Choice
+      // X) ..." breakdown) simply follows directly after the "Answer: X"
+      // line with a blank line in between. Treat everything from right
+      // after the Answer line through the end of the block as the
+      // explanation in that case, so this format is never silently
+      // dropped/left empty.
+      const ansEnd = posAns + ansMatch[0].length;
+      explanationText = block.substring(ansEnd).trim();
     }
 
-    if (stem && textA && textB && textC && textD) {
+    // Only A and B are mandatory; a question is valid as soon as it has a
+    // stem, both of those, and a recognized answer letter matching one of
+    // the options actually present.
+    if (stem && optionTexts.A && optionTexts.B && answerLetter && optionTexts[answerLetter as 'A' | 'B' | 'C' | 'D' | 'E']) {
+      const options: any = { A: optionTexts.A, B: optionTexts.B };
+      if (optionTexts.C) options.C = optionTexts.C;
+      if (optionTexts.D) options.D = optionTexts.D;
+      if (optionTexts.E) options.E = optionTexts.E;
+
       parsedQuestions.push({
         question: stem,
-        options: {
-          A: textA,
-          B: textB,
-          C: textC,
-          D: textD
-        },
+        options,
         correctAnswer: answerLetter,
         explanation: explanationText
       });
@@ -557,14 +694,15 @@ export const previewImportBatch = (
       reasons.push('Missing question stem text');
     }
 
-    // Check options from either qObj.options object or flat keys A, B, C, D
-    let opts: { A?: string; B?: string; C?: string; D?: string } | null = null;
+    // Check options from either qObj.options object or flat keys A, B, C, D, E
+    let opts: { A?: string; B?: string; C?: string; D?: string; E?: string } | null = null;
     if (qObj.options && typeof qObj.options === 'object' && !Array.isArray(qObj.options)) {
       opts = {
         A: String(qObj.options.A || qObj.options.a || '').trim(),
         B: String(qObj.options.B || qObj.options.b || '').trim(),
         C: String(qObj.options.C || qObj.options.c || '').trim(),
         D: String(qObj.options.D || qObj.options.d || '').trim(),
+        E: qObj.options.E || qObj.options.e ? String(qObj.options.E || qObj.options.e).trim() : undefined,
       };
     } else if (qObj.A !== undefined || qObj.a !== undefined) {
       opts = {
@@ -572,6 +710,7 @@ export const previewImportBatch = (
         B: String(qObj.B || qObj.b || '').trim(),
         C: String(qObj.C || qObj.c || '').trim(),
         D: String(qObj.D || qObj.d || '').trim(),
+        E: qObj.E || qObj.e ? String(qObj.E || qObj.e).trim() : undefined,
       };
     } else if (Array.isArray(qObj.options) && qObj.options.length >= 4) {
       opts = {
@@ -579,6 +718,7 @@ export const previewImportBatch = (
         B: String(qObj.options[1] || '').trim(),
         C: String(qObj.options[2] || '').trim(),
         D: String(qObj.options[3] || '').trim(),
+        E: qObj.options[4] ? String(qObj.options[4]).trim() : undefined,
       };
     } else if (Array.isArray(qObj.choices) && qObj.choices.length >= 4) {
       opts = {
@@ -586,6 +726,7 @@ export const previewImportBatch = (
         B: String(qObj.choices[1] || '').trim(),
         C: String(qObj.choices[2] || '').trim(),
         D: String(qObj.choices[3] || '').trim(),
+        E: qObj.choices[4] ? String(qObj.choices[4]).trim() : undefined,
       };
     }
 
@@ -603,8 +744,9 @@ export const previewImportBatch = (
       qObj.correctAnswer || qObj.correct_answer || qObj.answer || qObj.Answer || qObj.ans || qObj.correct || ''
     ).toUpperCase().trim();
 
-    if (!['A', 'B', 'C', 'D'].includes(ans)) {
-      reasons.push(`Invalid correctAnswer "${ans}" (must be A, B, C, or D)`);
+    const validAnswerKeys = opts?.E ? ['A', 'B', 'C', 'D', 'E'] : ['A', 'B', 'C', 'D'];
+    if (!validAnswerKeys.includes(ans)) {
+      reasons.push(`Invalid correctAnswer "${ans}" (must be ${validAnswerKeys.join(', ')})`);
     }
 
     if (reasons.length > 0) {
@@ -628,7 +770,7 @@ export const previewImportBatch = (
 
     const qId = qObj.id && String(qObj.id).trim()
       ? String(qObj.id).trim()
-      : `${selectedBankId.toUpperCase()}-${selectedYear}-${String(idx + 1).padStart(3, '0')}`;
+      : `${selectedBankId.toUpperCase()}-${selectedYear}-${Date.now().toString(36)}-${idx}-${Math.random().toString(36).slice(2, 6)}`;
 
     const rawExplanation = qObj.explanation || qObj.Explanation || qObj.exp || qObj.rationale;
 
@@ -641,7 +783,8 @@ export const previewImportBatch = (
         A: opts!.A!,
         B: opts!.B!,
         C: opts!.C!,
-        D: opts!.D!
+        D: opts!.D!,
+        ...(opts!.E ? { E: opts!.E } : {})
       },
       correctAnswer: ans as OptionKey,
       explanation: rawExplanation ? String(rawExplanation).trim() : 'No explanation provided.',
@@ -678,7 +821,7 @@ export const previewImportBatch = (
 
 export const executeImportBatch = async (
   previewResult: ImportPreviewResult,
-  duplicateAction: 'skip' | 'update' | 'cancel',
+  duplicateAction: 'skip' | 'update' | 'cancel' | 'import_as_new',
   adminId: string
 ): Promise<{ importedCount: number; batchId: string }> => {
   if (!verifyTelegramAdminAuthorization(adminId)) {
@@ -689,16 +832,26 @@ export const executeImportBatch = async (
     throw new Error('Import cancelled by Admin.');
   }
 
-  let existing = getStoredQuestions();
-  const existingIdsSet = new Set(existing.map((q) => q.id));
+  // ROOT CAUSE FIX: this used to pre-filter the batch against localStorage
+  // (getStoredQuestions(), which can be stale/incomplete on the admin's own
+  // device) and then send whatever survived that filter straight to a
+  // server endpoint that ALWAYS upserted by ID regardless of the chosen
+  // action — so "Skip Duplicates" had no real effect, and colliding IDs
+  // silently overwrote unrelated existing questions. The server is now the
+  // single source of truth for duplicate detection (it queries Supabase
+  // directly) and for what happens to each colliding ID, based on the
+  // 'strategy' field below. The full, unfiltered batch is always sent —
+  // the server decides what's genuinely new vs conflicting.
+  const strategyMap: Record<string, 'skip' | 'overwrite' | 'import_as_new'> = {
+    skip: 'skip',
+    update: 'overwrite',
+    import_as_new: 'import_as_new'
+  };
+  const strategy = strategyMap[duplicateAction] || 'import_as_new';
 
-  let questionsToAddOrUpdate = [...previewResult.validQuestions];
+  const questionsToSend = [...previewResult.validQuestions];
 
-  if (duplicateAction === 'skip') {
-    questionsToAddOrUpdate = questionsToAddOrUpdate.filter((q) => !existingIdsSet.has(q.id));
-  }
-
-  // Persist batch to Supabase via backend API
+  // Persist batch to Supabase via backend API — server-authoritative.
   const res = await fetch('/api/questions/import?dryRun=false', {
     method: 'POST',
     headers: {
@@ -706,8 +859,9 @@ export const executeImportBatch = async (
       'x-telegram-user-id': adminId
     },
     body: JSON.stringify({
-      questions: questionsToAddOrUpdate,
-      dryRun: false
+      questions: questionsToSend,
+      dryRun: false,
+      strategy
     })
   });
 
@@ -716,23 +870,6 @@ export const executeImportBatch = async (
   if (!res.ok) {
     throw new Error(responseData.error || `HTTP error ${res.status}: Failed to import questions to Supabase database.`);
   }
-
-  // Update local storage cache
-  if (duplicateAction === 'update') {
-    const updateMap = new Map<string, Question>();
-    existing.forEach((q) => updateMap.set(q.id, q));
-    questionsToAddOrUpdate.forEach((q) => updateMap.set(q.id, q));
-    existing = Array.from(updateMap.values());
-  } else {
-    const existingIds = new Set(existing.map((q) => q.id));
-    questionsToAddOrUpdate.forEach((q) => {
-      if (!existingIds.has(q.id)) {
-        existing.push(q);
-      }
-    });
-  }
-
-  saveStoredQuestions(existing);
 
   const batchId = `import_${Date.now()}`;
   const batchRecord: ImportBatch = {
@@ -752,11 +889,14 @@ export const executeImportBatch = async (
 
   saveImportBatchRecord(batchRecord);
 
-  // Sync back full remote set from Supabase
+  // Re-sync the full, real dataset from Supabase — the only source of
+  // truth after the write. No manual local-storage reconstruction of what
+  // "should" have happened; this always reflects exactly what the server
+  // actually did.
   await syncQuestionsWithSupabase().catch(() => {});
 
   return {
-    importedCount: responseData.importedCount || questionsToAddOrUpdate.length,
+    importedCount: responseData.importedCount || questionsToSend.length,
     batchId
   };
 };
@@ -879,6 +1019,16 @@ export const migrateLocalQuestionsToSupabase = async (
     };
   }
 
+  // ROOT CAUSE FIX: this previously sent no `strategy` at all, so it fell
+  // through to the import endpoint's default ('import_as_new') — meaning
+  // EVERY question in the local cache, even completely unchanged ones,
+  // collided with its own already-synced Supabase row and got a freshly
+  // generated ID + inserted as a brand-new duplicate record, every single
+  // time this button was clicked. 'overwrite' is the correct strategy for
+  // this specific operation: a question whose ID already exists gets
+  // updated in place (same row, same ID — safe for user progress), and a
+  // question whose ID doesn't exist yet gets inserted as new. Running this
+  // repeatedly with an unchanged local dataset is now a true no-op.
   const res = await fetch('/api/questions/import?dryRun=false', {
     method: 'POST',
     headers: {
@@ -887,7 +1037,8 @@ export const migrateLocalQuestionsToSupabase = async (
     },
     body: JSON.stringify({
       questions: localQuestions,
-      dryRun: false
+      dryRun: false,
+      strategy: 'overwrite'
     })
   });
 
@@ -899,10 +1050,13 @@ export const migrateLocalQuestionsToSupabase = async (
 
   await syncQuestionsWithSupabase().catch(() => {});
 
+  const inserted = data.insertedCount ?? 0;
+  const updated = data.overwrittenCount ?? 0;
+
   return {
     success: true,
     count: data.importedCount || localQuestions.length,
-    message: `Successfully migrated ${data.importedCount || localQuestions.length} questions to Supabase database.`
+    message: `SYNC COMPLETE — Source: ${localQuestions.length} | New inserted: ${inserted} | Existing updated: ${updated} | Deleted: 0`
   };
 };
 
@@ -985,8 +1139,14 @@ export const exportQuestionsJSON = (filters?: {
   return JSON.stringify(exportObject, null, 2);
 };
 
-export const getQuestionBankStatsOverview = () => {
-  const questions = getStoredQuestions();
+export const getQuestionBankStatsOverview = (bankId?: string) => {
+  // ROOT CAUSE FIX: previously aggregated across ALL banks combined with
+  // zero bank-awareness, same category of bug already found and fixed for
+  // the classification screen and exam block builder. An optional bankId
+  // scopes every count below to just that bank; omitting it preserves the
+  // old "everything combined" behavior for any other caller that still
+  // needs it.
+  const questions = getStoredQuestions().filter((q) => !bankId || q.bankId === bankId);
   const total = questions.length;
 
   // Year breakdown
@@ -1027,29 +1187,67 @@ export const getQuestionBankStatsOverview = () => {
   };
 };
 
+export const reportQuestionIssue = async (questionId: string, message?: string): Promise<boolean> => {
+  const user = getCurrentUser();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-telegram-user-id': user.telegramId || '',
+    'x-telegram-username': user.username || ''
+  };
+
+  const response = await fetch(`/api/questions/${encodeURIComponent(questionId)}/feedback`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: message || '' })
+  });
+
+  if (response.ok) return true;
+
+  const data = await response.json().catch(() => ({}));
+  throw new Error(data.error || 'Failed to submit question feedback.');
+};
+
 export const getQuestionStats = (questionId: string): QuestionStats => {
   return (
     DEMO_QUESTION_STATS[questionId] || {
       questionId,
-      distribution: { A: 25, B: 25, C: 25, D: 25 },
+      distribution: { A: 25, B: 25, C: 25, D: 25, E: 0 },
       totalAttempts: 0
     }
   );
 };
 
+// Single-active-session enforcement: one random ID generated once per page
+// load (i.e. once per real session — a fresh app open/reload always starts
+// a new one). Sent with block-creation requests so the server can detect and
+// reject a second concurrent session for the same account. See
+// checkAndRegisterSession() in server.ts for the enforcement logic.
+const CLIENT_SESSION_ID: string =
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
 export const syncBlockToSupabase = async (block: Block): Promise<void> => {
   try {
     if (typeof window === 'undefined') return;
     const user = getCurrentUser();
-    await fetch('/api/blocks', {
+    const response = await fetch('/api/blocks', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-telegram-user-id': user.telegramId || '',
-        'x-telegram-username': user.username || ''
+        'x-telegram-username': user.username || '',
+        'x-session-id': CLIENT_SESSION_ID
       },
-      body: JSON.stringify({ block })
+      body: JSON.stringify({ block, sessionId: CLIENT_SESSION_ID })
     });
+
+    if (response.status === 409) {
+      const data = await response.json().catch(() => ({}));
+      if (data.code === 'SESSION_CONFLICT') {
+        await alertAction(data.error || 'يبدو أنك تستخدم حسابك من جهاز أو نافذة أخرى حالياً.');
+      }
+    }
   } catch (err) {
     console.warn("Background sync of block to Supabase failed, falling back to local storage:", err);
   }
@@ -1133,7 +1331,7 @@ export const startBlock = async (userId: string, filters: BlockFilters, bankId: 
     }
   }
 
-  const filterWithUser = { ...filters, userId: filters.userId || canonicalId };
+  const filterWithUser = { ...filters, userId: filters.userId || canonicalId, bankId };
   const matchingQuestions = getFilteredQuestions(filterWithUser);
   if (matchingQuestions.length === 0) {
     throw new Error('No questions match the selected filter criteria.');
