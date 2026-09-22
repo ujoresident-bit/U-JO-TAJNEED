@@ -132,7 +132,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
       {isObscured && (
         <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-xl z-[9999] flex items-center justify-center text-slate-300 font-bold p-6 text-center select-none" dir="rtl">
           <div className="space-y-2">
-            <div className="text-2xl">🩺 U JO Resident</div>
+            <div className="text-2xl">🩺 U JO TAJNEED</div>
             <p className="text-sm text-slate-400">المحتوى محمي لمستخدم المنصة. يرجى العودة للتبويب لعرض المحتوى.</p>
           </div>
         </div>
