@@ -240,10 +240,10 @@ export const syncUserToSupabase = async (user: User): Promise<void> => {
             : (rawStatus as SubscriptionStatus) || 'INACTIVE';
 
           const subs = getStoredSubscriptions();
-          const userSubKey = `${canonicalUser.telegramId}_moh_bank`;
+          const userSubKey = `${canonicalUser.telegramId}_human_medicine`;
           subs[userSubKey] = {
             userId: canonicalUser.telegramId,
-            bankId: 'moh_bank',
+            bankId: 'human_medicine',
             status,
             plan: data.subscription?.plan || 'MOH Pass',
             startDate: data.subscription?.created_at,
@@ -319,5 +319,3 @@ export const resolveSession = (telegramUserId?: string): ResolvedSession => {
     isSubscribed: resolvedStatus === 'ACTIVE'
   };
 };
-
-
