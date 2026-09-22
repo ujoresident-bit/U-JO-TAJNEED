@@ -1,6 +1,0 @@
-{
-  "name": "U JO Resident",
-  "description": "MOH Residency Question Bank - Medical Exam Preparation Platform",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
