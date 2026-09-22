@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --neon-cyan: #00F2FF;
+  --neon-purple: #7000FF;
+  --glass: rgba(255, 255, 255, 0.03);
+  --border: rgba(255, 255, 255, 0.08);
+}
+
+body {
+  background-color: #050506;
+  color: #e2e8f0;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+}
+
+.neon-text {
+  color: var(--neon-cyan);
+  text-shadow: 0 0 10px rgba(0, 242, 255, 0.3);
+}
+
+.neon-border {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);
+}
+
+.neon-bg {
+  background: var(--neon-cyan);
+  color: #050506;
+  box-shadow: 0 0 20px rgba(0, 242, 255, 0.4);
+}
+
+.stats-gradient {
+  background: linear-gradient(135deg, rgba(112, 0, 255, 0.1) 0%, rgba(0, 242, 255, 0.05) 100%);
+}
+
+/* Content Protection Rules */
+.protected-content {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+/* Allow selection in form elements and inputs */
+input,
+textarea,
+select,
+[contenteditable="true"],
+.allow-select,
+.allow-select * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
+/* Disable image drag */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+.allow-drag-img img {
+  -webkit-user-drag: auto;
+  user-drag: auto;
+}
+
+/* Print protection stylesheet */
+@media print {
+  body {
+    display: none !important;
+  }
+}
+
