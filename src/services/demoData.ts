@@ -1,19 +1,28 @@
 import { Question, QuestionStats, QuestionBankMeta, AdminConfig } from '../types';
 
 export const INITIAL_ADMIN_CONFIG: AdminConfig = {
-  paymentPhoneNumber: '079 812 3456',
-  paymentAccountName: 'Saif Al-Deen (U JO Resident)',
-  subscriptionPrice: 25, // 25 JOD
+  paymentPhoneNumber: '0798813251',
+  paymentAccountName: 'U JO TAJNEED',
+  subscriptionPrice: 25, // 25 JOD — per-bank pricing lives in Supabase's bank_pricing table
   subscriptionDurationDays: 30,
   paymentInstructions: 'Transfer via Zain Cash or CliQ to the phone number above. Enter your Telegram username and optional transaction reference ID when submitting.'
 };
 
 export const MOH_BANK_META: QuestionBankMeta = {
-  id: 'moh_bank',
-  name: 'MOH Residency Question Bank',
-  description: 'Jordanian Ministry of Health Residency Entrance & Board Exam Bank',
+  id: 'human_medicine',
+  name: 'U JO TAJNEED — Human Medicine',
+  description: 'Human Medicine practice question bank for the Medical Services recruitment exam',
   totalQuestions: 0,
-  yearsAvailable: [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],
+  yearsAvailable: [],
+  majors: []
+};
+
+export const USMLE_BANK_META: QuestionBankMeta = {
+  id: 'dentistry',
+  name: 'U JO TAJNEED — Dentistry',
+  description: 'Dentistry practice question bank for the Medical Services recruitment exam',
+  totalQuestions: 0,
+  yearsAvailable: [],
   majors: []
 };
 
