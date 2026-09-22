@@ -56,7 +56,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
 
   // Add Question Form State
   const [newQ, setNewQ] = useState<Partial<Question>>({
-    bankId: 'moh_bank',
+    bankId: 'human_medicine',
     year: 2025,
     major: 'Internal Medicine',
     topic: 'Cardiology',
@@ -128,7 +128,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
       await addSingleQuestion(
         {
           id: newId,
-          bankId: newQ.bankId || 'moh_bank',
+          bankId: newQ.bankId || 'human_medicine',
           year: newQ.year || 2025,
           major: newQ.major || 'Internal Medicine',
           topic: newQ.topic || 'General',
@@ -149,7 +149,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
       setActionSuccess('Question created successfully in Supabase database.');
       setShowAddModal(false);
       setNewQ({
-        bankId: 'moh_bank',
+        bankId: 'human_medicine',
         year: 2025,
         major: 'Internal Medicine',
         topic: 'Cardiology',
@@ -328,7 +328,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none"
             >
               <option value="All">All Banks</option>
-              <option value="moh_bank">MOH Bank</option>
+              <option value="human_medicine">MOH Bank</option>
             </select>
           </div>
 
