@@ -2,7 +2,24 @@ import 'dotenv/config';
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
+
+// Relaxed safety thresholds for legitimate clinical/medical education
+// content classification tasks (topic tagging, explanation completion for
+// board-review questions). Default Gemini safety thresholds are tuned for
+// general consumer chat and can silently drop or refuse otherwise entirely
+// appropriate medical questions that happen to touch on sensitive but
+// clinically routine subjects — STIs, domestic violence screening,
+// sexual/reproductive health, etc. — causing exactly the kind of "returned
+// fewer results than requested, no error" behavior seen with OB/GYN
+// question batches. BLOCK_ONLY_HIGH still blocks genuinely extreme content
+// while allowing standard clinical vignette material through.
+const MEDICAL_CONTENT_SAFETY_SETTINGS = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH }
+];
 import { getSupabase, isSupabaseConfigured } from "./src/services/supabaseServer.js";
 
 async function startServer() {
@@ -11,11 +28,24 @@ async function startServer() {
 
   app.use(express.json({ limit: '20mb' }));
 
+  // Never let any intermediate layer (browser HTTP cache, Telegram's in-app
+  // WebView, Render's edge/CDN) cache API responses. Without this, a GET like
+  // /api/admin/users can be served stale after a mutating action (Approve/
+  // Reject/Cancel/Activate) even on a hard/full page reload, because the
+  // reload only guarantees a fresh index.html — it does not guarantee the
+  // subsequent API calls bypass every caching layer in between.
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
   // API Health & Config endpoints
   app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
-      name: "U JO Resident",
+      name: "U JO TAJNEED",
       bank: "MOH Residency Question Bank",
       supabaseConfigured: isSupabaseConfigured(),
       environmentDiagnostics: {
@@ -145,7 +175,7 @@ async function startServer() {
       .insert({
         telegram_id: tgIdNum || 88899901,
         telegram_username: tgUsername,
-        full_name: fullNameStr || 'Resident Doctor',
+        full_name: fullNameStr || null,
         role: userRole,
         created_at: now,
         updated_at: now
@@ -201,10 +231,271 @@ async function startServer() {
     };
   }
 
-  async function resolveAuthoritativeUserSubscription(userDbId: string, bankId: string = 'moh_bank') {
-    const supabase = getSupabase();
-    if (!supabase || !userDbId) return { isSubscribed: false, normalizedStatus: 'INACTIVE' as const, subscription: null };
+  /**
+   * Schema-safe payment status update.
+   * PART 14 requirement: never assume optional reviewer columns exist.
+   * Tries the full update (including reviewed_by/reviewed_at) first. If the
+   * database rejects it specifically because those columns don't exist
+   * (Postgres: `column "reviewed_by" does not exist` / undefined_column 42703),
+   * automatically retries with only the fields the schema is guaranteed to have.
+   * Any other error (RLS, network, constraint) is returned as-is, unmodified,
+   * so the real cause is never hidden.
+   */
+  async function updatePaymentReviewStatus(
+    supabase: any,
+    paymentId: string,
+    statusValue: 'APPROVED' | 'REJECTED',
+    reviewerUserId: string,
+    userIdToLink?: string
+  ): Promise<{ data: any; error: any; reviewerFieldsPersisted: boolean }> {
+    const now = new Date().toISOString();
 
+    const fullPayload: Record<string, any> = {
+      status: statusValue,
+      reviewed_by: reviewerUserId,
+      reviewed_at: now,
+      updated_at: now
+    };
+    if (userIdToLink) fullPayload.user_id = userIdToLink;
+
+    const first = await supabase
+      .from('payments')
+      .update(fullPayload)
+      .eq('id', paymentId)
+      .select()
+      .single();
+
+    if (!first.error) {
+      return { data: first.data, error: null, reviewerFieldsPersisted: true };
+    }
+
+    const msg = String(first.error.message || '').toLowerCase();
+    const isMissingReviewerColumn =
+      first.error.code === '42703' ||
+      (msg.includes('column') && (msg.includes('reviewed_by') || msg.includes('reviewed_at')));
+
+    if (!isMissingReviewerColumn) {
+      // A different, real error (RLS, constraint, network) — surface it unmodified.
+      return { data: null, error: first.error, reviewerFieldsPersisted: false };
+    }
+
+    console.warn(
+      `[PAYMENT_REVIEW_SCHEMA_FALLBACK] paymentId=${paymentId} reason="${first.error.message}" — retrying update without reviewed_by/reviewed_at (schema does not support these columns).`
+    );
+
+    const reducedPayload: Record<string, any> = { status: statusValue, updated_at: now };
+    if (userIdToLink) reducedPayload.user_id = userIdToLink;
+
+    const second = await supabase
+      .from('payments')
+      .update(reducedPayload)
+      .eq('id', paymentId)
+      .select()
+      .single();
+
+    return { data: second.data, error: second.error, reviewerFieldsPersisted: false };
+  }
+
+  // Single-active-session enforcement: whenever a client claims a session
+  // (via a fresh app load), it should become the ONLY session allowed to
+  // access question content — any other still-open tab/device gets rejected
+  // until it re-claims. A stale session (no activity for SESSION_TIMEOUT_MS)
+  // is treated as abandoned and can be silently taken over, so a genuinely
+  // closed old tab doesn't lock the user out forever.
+  //
+  // Schema-safe: if users.session_id / users.session_updated_at don't exist
+  // yet, this fails open (never blocks access) and logs a warning — run the
+  // migration below to actually enable enforcement:
+  //
+  //   alter table users add column if not exists session_id text;
+  //   alter table users add column if not exists session_updated_at timestamptz;
+  //
+  const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes of inactivity = session considered abandoned
+
+  // Lightweight behavioral monitoring: tracks how often each user creates
+  // question blocks in a rolling window, purely to surface unusually
+  // aggressive access patterns to the admin (e.g. an account being used to
+  // bulk-scrape the question bank) rather than to block anything
+  // automatically. In-memory only — resets on restart, which is acceptable
+  // for a monitoring aid (unlike an access-control decision).
+  const BEHAVIOR_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+  const BEHAVIOR_SUSPICIOUS_THRESHOLD = 15; // block-creation events per hour
+  const blockActivityByUser = new Map<string, number[]>();
+
+  function recordBlockActivity(userDbId: string): { count: number; suspicious: boolean } {
+    const now = Date.now();
+    const existing = blockActivityByUser.get(userDbId) || [];
+    const recent = existing.filter((t) => now - t < BEHAVIOR_WINDOW_MS);
+    recent.push(now);
+    blockActivityByUser.set(userDbId, recent);
+    const suspicious = recent.length > BEHAVIOR_SUSPICIOUS_THRESHOLD;
+    if (suspicious) {
+      console.log(`[BEHAVIOR_MONITOR] userDbId=${userDbId} created ${recent.length} blocks in the last hour (threshold=${BEHAVIOR_SUSPICIOUS_THRESHOLD}) — possible bulk extraction.`);
+    }
+    return { count: recent.length, suspicious };
+  }
+
+  const MAX_CONCURRENT_SESSIONS = 2;
+
+  async function checkAndRegisterSession(userDbId: string, incomingSessionId: string | null): Promise<{ ok: boolean; reason?: string }> {
+    const supabase = getSupabase();
+    if (!supabase || !userDbId || !incomingSessionId) {
+      return { ok: true }; // Fail open: no session id sent (older client) — don't block.
+    }
+
+    const { data: userRow, error: selectErr } = await supabase
+      .from('users')
+      .select('session_id')
+      .eq('id', userDbId)
+      .maybeSingle();
+
+    if (selectErr) {
+      if (selectErr.code === '42703') {
+        console.warn('[SESSION_GUARD] users.session_id column not found — session limiting is disabled until the migration is applied.');
+        return { ok: true };
+      }
+      console.error(`[SESSION_GUARD] Failed to read session state for userDbId=${userDbId}: ${selectErr.message}`);
+      return { ok: true }; // Fail open on unexpected errors — never block legitimate access due to an infra hiccup.
+    }
+
+    // Sessions are stored as a JSON array of {id, updatedAt} in the same
+    // session_id text column (no extra migration needed to raise the limit
+    // from 1 to N later). Anything unparsable (empty, legacy plain string
+    // from before this change) is treated as "no active sessions".
+    let activeSessions: { id: string; updatedAt: number }[] = [];
+    try {
+      const raw = userRow?.session_id;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) activeSessions = parsed;
+      }
+    } catch {
+      activeSessions = [];
+    }
+
+    const now = Date.now();
+    // Drop stale entries (no activity for SESSION_TIMEOUT_MS) — an
+    // abandoned old tab/device shouldn't permanently occupy a slot.
+    activeSessions = activeSessions.filter((s) => now - s.updatedAt < SESSION_TIMEOUT_MS);
+
+    const existingIdx = activeSessions.findIndex((s) => s.id === incomingSessionId);
+    if (existingIdx === -1 && activeSessions.length >= MAX_CONCURRENT_SESSIONS) {
+      console.log(`[SESSION_GUARD] Rejected session for userDbId=${userDbId} — ${activeSessions.length} active sessions already (limit=${MAX_CONCURRENT_SESSIONS}).`);
+      return {
+        ok: false,
+        reason: `يبدو أنك تستخدم حسابك من ${MAX_CONCURRENT_SESSIONS} أجهزة أخرى حالياً. أغلق إحدى الجلسات وأعد المحاولة.`
+      };
+    }
+
+    if (existingIdx >= 0) {
+      activeSessions[existingIdx].updatedAt = now;
+    } else {
+      activeSessions.push({ id: incomingSessionId, updatedAt: now });
+    }
+
+    const { error: updateErr } = await supabase
+      .from('users')
+      .update({ session_id: JSON.stringify(activeSessions), session_updated_at: new Date().toISOString() })
+      .eq('id', userDbId);
+
+    if (updateErr && updateErr.code !== '42703') {
+      console.error(`[SESSION_GUARD] Failed to register session for userDbId=${userDbId}: ${updateErr.message}`);
+    }
+
+    return { ok: true };
+  }
+
+  // --- User profile (full name + phone) validation & save ---
+  // Requirement: reject obvious junk ("test", "aaa", digits-only, the literal
+  // web_resident_01 fallback identity) without being so strict that real
+  // English names get rejected. At least two space-separated alphabetic
+  // words is the bar.
+  function validateFullName(raw: string): { valid: boolean; value?: string; reason?: string } {
+    const trimmed = (raw || '').trim().replace(/\s+/g, ' ');
+    if (trimmed.length < 4) return { valid: false, reason: 'الاسم قصير جداً.' };
+
+    const junkPatterns = /^(test|aaa+|asd+|qwe+|xxx+|123+|web_resident_01|admin|resident)$/i;
+    const words = trimmed.split(' ');
+    if (words.length < 2) return { valid: false, reason: 'الرجاء إرسال الاسم الثلاثي كاملاً.' };
+    if (junkPatterns.test(trimmed.replace(/\s+/g, ''))) return { valid: false, reason: 'الاسم غير واضح.' };
+    if (!/^[A-Za-z\s.'-]+$/.test(trimmed)) return { valid: false, reason: 'الرجاء إرسال الاسم بالأحرف الإنجليزية فقط.' };
+    if (words.some((w) => w.length < 2)) return { valid: false, reason: 'الاسم غير واضح.' };
+
+    return { valid: true, value: trimmed };
+  }
+
+  // Normalizes common Jordanian mobile number formats to +962XXXXXXXXX.
+  // Lenient: any 8-9 digit local number, +962/00962-prefixed, is accepted
+  // rather than rejecting anything not exactly matching one template.
+  // STRICT per product requirement: the phone number must already be
+  // provided in full international format (+962XXXXXXXXX) — this function
+  // no longer silently converts a local "07..." input to "+962...". A
+  // number missing the +962 prefix is now rejected outright so the bot can
+  // ask the user to resend it in the correct format, rather than guessing
+  // and potentially storing an incorrectly-normalized value.
+  function validateEmail(raw: string): { valid: boolean; value?: string; reason?: string } {
+    const trimmed = (raw || '').trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      return { valid: false, reason: 'صيغة البريد الإلكتروني غير صحيحة. مثال: name@example.com' };
+    }
+
+    const junkEmails = new Set(['test@test.com', 'a@a.com', 'admin@admin.com', 'example@example.com']);
+    if (junkEmails.has(trimmed)) {
+      return { valid: false, reason: 'يرجى إرسال بريدك الإلكتروني الحقيقي.' };
+    }
+
+    return { valid: true, value: trimmed };
+  }
+
+  // Schema-safe write, same defensive pattern as updatePaymentReviewStatus /
+  // is_active above: if users.email doesn't exist yet, retry without it and
+  // log clearly rather than hard-failing the whole save.
+  //
+  // Supports PARTIAL updates — either field may be omitted (undefined) so
+  // the bot can save "just the name" or "just the email" when they arrive
+  // as separate messages, without requiring both at once.
+  async function saveUserProfile(userDbId: string, fullName?: string, email?: string): Promise<{ ok: boolean; persisted: boolean; error?: string }> {
+    const supabase = getSupabase();
+    if (!supabase || !userDbId) return { ok: false, persisted: false, error: 'Supabase not configured.' };
+    if (!fullName && !email) return { ok: false, persisted: false, error: 'Nothing to save.' };
+
+    const fullPayload: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (fullName !== undefined) fullPayload.full_name = fullName;
+    if (email !== undefined) fullPayload.email = email;
+
+    const { error } = await supabase
+      .from('users')
+      .update(fullPayload)
+      .eq('id', userDbId);
+
+    if (!error) return { ok: true, persisted: true };
+
+    if (error.code === '42703') {
+      console.warn('[PROFILE_SAVE] users.email column not found — saving full_name only until the migration is applied.');
+      const reducedPayload: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (fullName !== undefined) reducedPayload.full_name = fullName;
+      const retry = await supabase
+        .from('users')
+        .update(reducedPayload)
+        .eq('id', userDbId);
+      if (!retry.error) return { ok: true, persisted: false };
+      return { ok: false, persisted: false, error: retry.error.message };
+    }
+
+    console.error(`[PROFILE_SAVE] Failed to save profile for userDbId=${userDbId}: ${error.message}`);
+    return { ok: false, persisted: false, error: error.message };
+  }
+
+  async function resolveAuthoritativeUserSubscription(userDbId: string, bankId: string) {
+    const supabase = getSupabase();
+    if (!supabase || !userDbId || !bankId) return { isSubscribed: false, normalizedStatus: 'INACTIVE' as const, subscription: null };
+
+    // ROOT CAUSE FIX: this previously ignored bankId entirely and just
+    // returned the user's single most recent subscription row across ALL
+    // banks — correct for U JO TAJNEED's "one subscription unlocks
+    // everything" model, but wrong here where Human Medicine and
+    // Dentistry each require their own separate subscription/payment.
     const { data: subRow, error } = await supabase
       .from('subscriptions')
       .select('*')
@@ -215,7 +506,7 @@ async function startServer() {
       .maybeSingle();
 
     if (error) {
-      console.error(`[SUB_AUTH_ERROR] userDbId=${userDbId} error=${error.message}`);
+      console.error(`[SUB_AUTH_ERROR] userDbId=${userDbId} bankId=${bankId} error=${error.message}`);
       throw error;
     }
 
@@ -231,7 +522,7 @@ async function startServer() {
   // Phase 1: User Sync Endpoint (Syncs Telegram user session to Supabase 'users' table)
   app.post("/api/users/sync", async (req, res) => {
     try {
-      const { telegramId, username, firstName, lastName } = req.body;
+      const { telegramId, username, firstName, lastName, bankId } = req.body;
       if (!telegramId) {
         return res.status(400).json({ error: "telegramId is required." });
       }
@@ -324,21 +615,133 @@ async function startServer() {
         dbUser = inserted;
       }
 
-      // Query active/latest subscription for dbUser using authoritative UUID helper
-      const subAuth = dbUser?.id
-        ? await resolveAuthoritativeUserSubscription(dbUser.id, 'moh_bank')
-        : { isSubscribed: false, normalizedStatus: 'INACTIVE' as const, subscription: null };
+      // Per-bank subscriptions: without a specific bankId, report status for
+      // EVERY bank so the frontend can decide access per-bank rather than
+      // getting one ambiguous "subscribed" boolean that could mean either.
+      let subAuth: any;
+      let subscriptionsByBank: Record<string, any> | undefined;
+
+      if (dbUser?.id) {
+        if (bankId) {
+          subAuth = await resolveAuthoritativeUserSubscription(dbUser.id, String(bankId));
+        } else {
+          const [humanMed, dent] = await Promise.all([
+            resolveAuthoritativeUserSubscription(dbUser.id, 'human_medicine'),
+            resolveAuthoritativeUserSubscription(dbUser.id, 'dentistry')
+          ]);
+          subscriptionsByBank = { human_medicine: humanMed, dentistry: dent };
+          // Backward-compatible top-level fields reflect whichever bank (if
+          // any) is currently subscribed, so older callers that only check
+          // `subscribed` still get a sensible answer.
+          subAuth = humanMed.isSubscribed ? humanMed : dent;
+        }
+      } else {
+        subAuth = { isSubscribed: false, normalizedStatus: 'INACTIVE' as const, subscription: null };
+      }
 
       return res.json({
         synced: true,
         user: dbUser,
         subscribed: subAuth.isSubscribed,
         status: subAuth.normalizedStatus,
-        subscription: subAuth.subscription
+        subscription: subAuth.subscription,
+        ...(subscriptionsByBank ? { subscriptionsByBank } : {})
       });
     } catch (err: any) {
       console.error("Error in /api/users/sync:", err);
       return res.status(500).json({ error: err.message || "Failed to sync user." });
+    }
+  });
+
+  // GET /api/users/me - returns the canonical authenticated user's own
+  // profile (full name, phone number if set). Used by the client-side
+  // watermark and any profile-completion UI. Never trusts a frontend-
+  // supplied user ID — identity is resolved server-side from the Telegram
+  // identity headers, same as every other authenticated endpoint.
+  app.get("/api/users/me", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow) {
+        return res.status(404).json({ error: "User not found." });
+      }
+
+      return res.json({
+        telegramId: String(userRow.telegram_id || requesterId || ''),
+        fullName: userRow.full_name || null,
+        email: userRow.email || null
+      });
+    } catch (err: any) {
+      console.error("Error in GET /api/users/me:", err);
+      return res.status(500).json({ error: err.message || "Failed to fetch profile." });
+    }
+  });
+
+  // POST /api/users/profile - saves full name + email for the canonical
+  // authenticated user (called by the Telegram bot after it collects this
+  // from the user post-approval). Validates both fields server-side
+  // (defense in depth even though the bot already validates before calling
+  // this). Never changes subscription state — a failed profile save has no
+  // effect on ACTIVE status, per the requirement that this stays strictly
+  // isolated from the approval flow.
+  app.post("/api/users/profile", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const { fullName, email } = req.body || {};
+      if (!fullName && !email) {
+        return res.status(400).json({ error: "At least one of fullName or email is required." });
+      }
+
+      let validatedName: string | undefined;
+      let validatedEmail: string | undefined;
+
+      if (fullName !== undefined) {
+        const nameCheck = validateFullName(String(fullName));
+        if (!nameCheck.valid) {
+          return res.status(400).json({ error: nameCheck.reason, field: 'fullName' });
+        }
+        validatedName = nameCheck.value;
+      }
+
+      if (email !== undefined) {
+        const emailCheck = validateEmail(String(email));
+        if (!emailCheck.valid) {
+          return res.status(400).json({ error: emailCheck.reason, field: 'email' });
+        }
+        validatedEmail = emailCheck.value;
+      }
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow || !userRow.id) {
+        return res.status(500).json({ error: "Failed to resolve user account." });
+      }
+
+      const saveResult = await saveUserProfile(userRow.id, validatedName, validatedEmail);
+      if (!saveResult.ok) {
+        return res.status(500).json({ error: saveResult.error || "Failed to save profile." });
+      }
+
+      return res.json({
+        success: true,
+        fullName: validatedName,
+        email: validatedEmail,
+        persisted: saveResult.persisted
+      });
+    } catch (err: any) {
+      console.error("Error in POST /api/users/profile:", err);
+      return res.status(500).json({ error: err.message || "Failed to save profile." });
     }
   });
 
@@ -512,10 +915,17 @@ async function startServer() {
         if (!options || typeof options !== 'object') {
           options = {
             A: q.option_a || q.optionA || '',
-            B: q.option_b || q.optionB || '',
-            C: q.option_c || q.optionC || '',
-            D: q.option_d || q.optionD || ''
+            B: q.option_b || q.optionB || ''
           };
+          // C, D, and E are all optional now — only added to the returned
+          // options object when the question actually has them, so a
+          // 2 or 3-option question is never padded with empty fake choices.
+          const cVal = q.option_c || q.optionC;
+          const dVal = q.option_d || q.optionD;
+          const eVal = q.option_e || q.optionE;
+          if (cVal) options.C = cVal;
+          if (dVal) options.D = dVal;
+          if (eVal) options.E = eVal;
         }
 
         let optionExplanations = q.option_explanations || q.optionExplanations;
@@ -529,7 +939,7 @@ async function startServer() {
 
         return {
           id: String(q.id),
-          bankId: q.bank_id || q.bankId || 'moh_bank',
+          bankId: q.bank_id || q.bankId || 'human_medicine',
           question: q.question || q.stem || '',
           options,
           correctAnswer: (q.correct_answer || q.correctAnswer || 'A') as 'A' | 'B' | 'C' | 'D',
@@ -595,6 +1005,7 @@ async function startServer() {
         option_b: String(opts.B || '').trim(),
         option_c: String(opts.C || '').trim(),
         option_d: String(opts.D || '').trim(),
+        option_e: opts.E ? String(opts.E).trim() : null,
         correct_answer: String(qObj.correctAnswer || 'A').toUpperCase().trim(),
         explanation: String(qObj.explanation || '').trim(),
         option_explanations: optExps || null,
@@ -651,6 +1062,7 @@ async function startServer() {
         option_b: String(opts.B || '').trim(),
         option_c: String(opts.C || '').trim(),
         option_d: String(opts.D || '').trim(),
+        option_e: opts.E ? String(opts.E).trim() : null,
         correct_answer: String(qObj.correctAnswer || 'A').toUpperCase().trim(),
         explanation: String(qObj.explanation || '').trim(),
         option_explanations: optExps || null,
@@ -799,6 +1211,20 @@ async function startServer() {
       const batchSeenIds = new Set<string>();
       const duplicateInBatchIds = new Set<string>();
 
+      // Import strategy — read explicitly from the request, defaulting to
+      // 'import_as_new'. ROOT CAUSE FIX: this field previously did not
+      // exist at all on the server; every import silently ran an
+      // unconditional upsert(onConflict:'id') regardless of what the admin
+      // selected in the UI ("Skip Duplicates" had zero effect server-side).
+      // 'import_as_new' is the new safe default: a colliding ID never
+      // overwrites the existing row — the INCOMING question gets a freshly
+      // generated unique ID and is inserted as a separate record, exactly
+      // matching the requested append-only behavior.
+      const strategy = (req.body?.strategy || req.body?.duplicateAction || 'import_as_new') as
+        | 'skip'
+        | 'overwrite'
+        | 'import_as_new';
+
       // 3. Batch Validation
       rawQuestions.forEach((qObj, idx) => {
         const reasons: string[] = [];
@@ -823,18 +1249,25 @@ async function startServer() {
             A: qObj.option_a || qObj.optionA,
             B: qObj.option_b || qObj.optionB,
             C: qObj.option_c || qObj.optionC,
-            D: qObj.option_d || qObj.optionD
+            D: qObj.option_d || qObj.optionD,
+            E: qObj.option_e || qObj.optionE
           };
         }
 
         if (!opts.A || typeof opts.A !== 'string' || !opts.A.trim()) reasons.push('Missing or empty Option A');
         if (!opts.B || typeof opts.B !== 'string' || !opts.B.trim()) reasons.push('Missing or empty Option B');
-        if (!opts.C || typeof opts.C !== 'string' || !opts.C.trim()) reasons.push('Missing or empty Option C');
-        if (!opts.D || typeof opts.D !== 'string' || !opts.D.trim()) reasons.push('Missing or empty Option D');
+        // C, D, and E are genuinely optional — some valid exam questions
+        // legitimately have only 2 or 3 choices (True/False, 3-option
+        // questions). Only A and B are mandatory; whichever of C/D/E are
+        // actually present with real text become valid answer keys below.
 
+        const hasOptionC = Boolean(opts.C && typeof opts.C === 'string' && opts.C.trim());
+        const hasOptionD = Boolean(opts.D && typeof opts.D === 'string' && opts.D.trim());
+        const hasOptionE = Boolean(opts.E && typeof opts.E === 'string' && opts.E.trim());
+        const validAnswerKeys = ['A', 'B', ...(hasOptionC ? ['C'] : []), ...(hasOptionD ? ['D'] : []), ...(hasOptionE ? ['E'] : [])];
         const ans = String(qObj.correctAnswer || qObj.correct_answer || '').toUpperCase().trim();
-        if (!['A', 'B', 'C', 'D'].includes(ans)) {
-          reasons.push(`Invalid correctAnswer "${qObj.correctAnswer || qObj.correct_answer}" (must be A, B, C, or D)`);
+        if (!validAnswerKeys.includes(ans)) {
+          reasons.push(`Invalid correctAnswer "${qObj.correctAnswer || qObj.correct_answer}" (must be ${validAnswerKeys.join(', ')})`);
         }
 
         if (reasons.length > 0) {
@@ -855,13 +1288,25 @@ async function startServer() {
           optExps = JSON.stringify(optExps);
         }
 
+        const year = Number(qObj.year || 2025);
+        // ROOT CAUSE FIX: bank_id was never read from the incoming question
+        // object here, so every imported question — including USMLE bank
+        // questions explicitly tagged with bankId on the client — silently
+        // fell back to the database column's default value ('human_medicine'
+        // from the original single-bank design), merging USMLE questions
+        // into the MOH bank's totals regardless of what the admin selected
+        // in the Import Wizard.
+        const bankId = qObj.bankId || qObj.bank_id ? String(qObj.bankId || qObj.bank_id).trim() : 'human_medicine';
+
         validQuestions.push({
           id: qId,
+          bank_id: bankId,
           question: questionText.trim(),
           option_a: String(opts.A).trim(),
           option_b: String(opts.B).trim(),
-          option_c: String(opts.C).trim(),
-          option_d: String(opts.D).trim(),
+          option_c: hasOptionC ? String(opts.C).trim() : null,
+          option_d: hasOptionD ? String(opts.D).trim() : null,
+          option_e: hasOptionE ? String(opts.E).trim() : null,
           correct_answer: ans,
           explanation: qObj.explanation ? String(qObj.explanation).trim() : 'No explanation provided.',
           option_explanations: optExps || null,
@@ -869,13 +1314,19 @@ async function startServer() {
           review_note: qObj.reviewNote || qObj.review_note || null,
           major: qObj.major ? String(qObj.major).trim() : 'General Medical Sciences',
           topic: qObj.topic ? String(qObj.topic).trim() : 'Unassigned Topic',
-          year: Number(qObj.year || 2025)
+          year
         });
       });
 
-      // 4. Supabase Database Checks
+      // 4. Supabase Database Checks — authoritative, live, never trusts the
+      // client's own idea of what's a duplicate (client-side preview reads
+      // localStorage, which can be stale/incomplete on the admin's device).
       const supabase = getSupabase();
       let existingInDatabaseCount = 0;
+      let conflictingIds: string[] = [];
+      let currentCountForYear = 0;
+
+      const requestedYear = validQuestions.length > 0 ? validQuestions[0].year : null;
 
       if (supabase) {
         const validIds = validQuestions.map((q) => q.id).filter(Boolean);
@@ -885,26 +1336,67 @@ async function startServer() {
             .select('id')
             .in('id', validIds);
           existingInDatabaseCount = existingRows ? existingRows.length : 0;
+          conflictingIds = existingRows ? existingRows.map((r: any) => r.id) : [];
+        }
+        if (requestedYear !== null) {
+          const { count } = await supabase
+            .from('questions')
+            .select('*', { count: 'exact', head: true })
+            .eq('year', requestedYear);
+          currentCountForYear = count || 0;
         }
       }
 
       const validCount = validQuestions.length;
       const invalidCount = invalidQuestions.length;
       const duplicateInBatchCount = duplicateInBatchIds.size;
-      const newCount = Math.max(0, validCount - existingInDatabaseCount - duplicateInBatchCount);
+      const conflictSet = new Set(conflictingIds);
+      const genuinelyNewCount = validQuestions.filter((q) => !conflictSet.has(q.id)).length;
 
-      // 5. Dry-Run Mode Response
+      // 5. Dry-Run Mode Response — full diagnostic report as requested:
+      // current count for the year, incoming count, conflict count,
+      // genuinely-new count, and exactly what will happen to each group
+      // under the selected strategy. Zero writes happen here.
       if (dryRun) {
+        let willInsertAsNew = genuinelyNewCount;
+        let willResolveConflict = 0;
+        let willOverwrite = 0;
+        let willSkip = 0;
+
+        if (strategy === 'overwrite') {
+          willOverwrite = conflictSet.size;
+        } else if (strategy === 'skip') {
+          willSkip = conflictSet.size;
+        } else {
+          // import_as_new (default)
+          willResolveConflict = conflictSet.size;
+        }
+
         return res.json({
           dryRun: true,
+          strategy,
           totalInBatch,
           validCount,
           invalidCount,
           duplicateInBatchCount,
           existingInDatabaseCount,
-          newCount,
+          newCount: genuinelyNewCount,
           invalidQuestions: invalidQuestions.slice(0, 10),
           duplicateInBatchIds: Array.from(duplicateInBatchIds),
+          conflictingIds: conflictingIds.slice(0, 50),
+          diagnosticReport: {
+            year: requestedYear,
+            currentCountForYear,
+            incomingCount: validCount,
+            conflictCount: conflictSet.size,
+            genuinelyNewCount,
+            willInsertAsNew,
+            willResolveConflictAndInsert: willResolveConflict,
+            willOverwriteExisting: willOverwrite,
+            willSkipAndLeaveUnchanged: willSkip,
+            expectedFinalCountForYear:
+              currentCountForYear + willInsertAsNew + willResolveConflict + (strategy === 'overwrite' ? 0 : 0)
+          },
           summary: {
             status: "dry_run_complete",
             message: "Dry-run validation complete. ZERO records were written to Supabase."
@@ -923,29 +1415,80 @@ async function startServer() {
         return res.status(500).json({ error: "Supabase client not configured." });
       }
 
-      // Upsert valid questions in chunks of 500
+      // 6. Actual write, branching on strategy. 'skip' and 'import_as_new'
+      // both use a plain INSERT (never upsert) for anything that isn't a
+      // guaranteed-new row, so there is zero possibility of silently
+      // overwriting an existing question via onConflict — that was the
+      // entire root cause of the original bug.
+      const nonConflicting = validQuestions.filter((q) => !conflictSet.has(q.id));
+      const conflicting = validQuestions.filter((q) => conflictSet.has(q.id));
+
+      let toInsert = [...nonConflicting];
+      let toUpsert: any[] = [];
+      let skippedCount = 0;
+
+      if (strategy === 'overwrite') {
+        toUpsert = conflicting; // explicit, intentional overwrite — the only path that still upserts
+      } else if (strategy === 'skip') {
+        skippedCount = conflicting.length; // left completely untouched
+      } else {
+        // import_as_new: give every conflicting question a fresh globally
+        // unique ID and insert it as a brand-new row. The original row
+        // (and anything referencing its ID, e.g. question_progress) is
+        // never touched.
+        const resolved = conflicting.map((q) => ({
+          ...q,
+          id: `${q.id}-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
+        }));
+        toInsert = toInsert.concat(resolved);
+      }
+
       let totalInserted = 0;
       const chunkSize = 500;
-      for (let i = 0; i < validQuestions.length; i += chunkSize) {
-        const chunk = validQuestions.slice(i, i + chunkSize);
+
+      for (let i = 0; i < toInsert.length; i += chunkSize) {
+        const chunk = toInsert.slice(i, i + chunkSize);
+        if (chunk.length === 0) continue;
         const { data: insertedData, error: insertError } = await supabase
           .from('questions')
-          .upsert(chunk, { onConflict: 'id' })
+          .insert(chunk)
           .select();
 
         if (insertError) {
-          console.error("Error upserting question batch into Supabase:", insertError.message);
+          console.error("Error inserting new questions into Supabase:", insertError.message);
           return res.status(500).json({ error: insertError.message });
         }
         totalInserted += insertedData ? insertedData.length : chunk.length;
       }
 
+      let totalUpserted = 0;
+      for (let i = 0; i < toUpsert.length; i += chunkSize) {
+        const chunk = toUpsert.slice(i, i + chunkSize);
+        if (chunk.length === 0) continue;
+        const { data: upsertedData, error: upsertError } = await supabase
+          .from('questions')
+          .upsert(chunk, { onConflict: 'id' })
+          .select();
+
+        if (upsertError) {
+          console.error("Error overwriting existing questions in Supabase:", upsertError.message);
+          return res.status(500).json({ error: upsertError.message });
+        }
+        totalUpserted += upsertedData ? upsertedData.length : chunk.length;
+      }
+
+      console.log(`[QUESTION_IMPORT] strategy=${strategy} inserted=${totalInserted} overwritten=${totalUpserted} skipped=${skippedCount} year=${requestedYear}`);
+
       return res.json({
         dryRun: false,
-        importedCount: totalInserted,
+        strategy,
+        insertedCount: totalInserted,
+        overwrittenCount: totalUpserted,
+        skippedCount,
+        importedCount: totalInserted + totalUpserted,
         summary: {
           status: "migration_completed",
-          message: `Successfully stored ${totalInserted} questions in Supabase database.`
+          message: `Inserted ${totalInserted} new question record(s), overwrote ${totalUpserted}, skipped ${skippedCount}.`
         }
       });
     } catch (err: any) {
@@ -1018,6 +1561,184 @@ async function startServer() {
     }
   });
 
+  // POST /api/flashcards/:id/feedback - user reports a problem with a
+  // flashcard (mirrors the question-feedback flow exactly).
+  app.post("/api/flashcards/:id/feedback", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const flashcardId = req.params.id;
+      if (!flashcardId) {
+        return res.status(400).json({ error: "Flashcard id parameter is required." });
+      }
+
+      const message = req.body?.message ? String(req.body.message).trim().slice(0, 1000) : '';
+
+      const supabase = getSupabase();
+      let cardSnapshot: any = null;
+      if (supabase) {
+        const { data } = await supabase
+          .from('flashcards')
+          .select('id, question, answer')
+          .eq('id', flashcardId)
+          .maybeSingle();
+        cardSnapshot = data;
+      }
+
+      const userRow = supabase ? await getOrCreateSupabaseUser(requesterId, requesterUsername) : null;
+      const reporterLabel = userRow?.full_name
+        ? userRow.full_name
+        : (requesterUsername ? `@${requesterUsername}` : `Telegram ID ${requesterId}`);
+
+      if (supabase) {
+        try {
+          const { error: insertErr } = await supabase
+            .from('flashcard_feedback')
+            .insert({
+              flashcard_id: flashcardId,
+              user_id: userRow?.id || null,
+              telegram_id: requesterId || (userRow?.telegram_id ? String(userRow.telegram_id) : null),
+              message: message || null,
+              created_at: new Date().toISOString()
+            });
+          if (insertErr && insertErr.code !== '42P01') {
+            console.warn(`[FLASHCARD_FEEDBACK] Failed to persist feedback for flashcardId=${flashcardId}: ${insertErr.message}`);
+          }
+        } catch (persistErr: any) {
+          console.warn(`[FLASHCARD_FEEDBACK] Unexpected error persisting feedback: ${persistErr?.message}`);
+        }
+      }
+
+      try {
+        const adminIds = getAdminTelegramIds();
+        const questionPreview = cardSnapshot?.question
+          ? (String(cardSnapshot.question).length > 200 ? String(cardSnapshot.question).slice(0, 200) + '…' : cardSnapshot.question)
+          : '(flashcard text unavailable)';
+
+        const notificationMessage =
+          `⚠️ <b>إبلاغ عن مشكلة بفلاش كارد</b>\n\n` +
+          `🆔 <b>Flashcard ID:</b> <code>${flashcardId}</code>\n` +
+          `📝 <b>السؤال:</b> ${questionPreview}\n\n` +
+          `👤 <b>المستخدم المُبلِّغ:</b> ${reporterLabel}\n` +
+          (message ? `💬 <b>ملاحظة المستخدم:</b> ${message}\n` : `💬 <b>ملاحظة المستخدم:</b> (لم يكتب تفاصيل)\n`) +
+          `\n<i>يمكنك مراجعة وتعديل الفلاش كارد من لوحة الإدارة باستخدام رقم الـ ID أعلاه.</i>`;
+
+        for (const adminId of adminIds) {
+          if (/^\d+$/.test(adminId)) {
+            await sendTelegramMessage(adminId, notificationMessage);
+          }
+        }
+      } catch (notifyErr: any) {
+        console.error(`[FLASHCARD_FEEDBACK] Failed to notify admins for flashcardId=${flashcardId}:`, notifyErr?.message || notifyErr);
+      }
+
+      console.log(`[FLASHCARD_FEEDBACK] flashcardId=${flashcardId} reporter=${reporterLabel} hasMessage=${Boolean(message)}`);
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/flashcards/:id/feedback:", err);
+      return res.status(500).json({ error: err.message || "Failed to submit flashcard feedback." });
+    }
+  });
+
+
+  // question (suspected wrong answer, unclear stem, etc). Notifies admins
+  // immediately via Telegram with the question ID so it's trivially easy
+  // to look up and fix, and also persists to Supabase (schema-safe — if the
+  // question_feedback table doesn't exist yet, the Telegram notification
+  // still goes out; only the persistence step is skipped).
+  app.post("/api/questions/:id/feedback", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const questionId = req.params.id;
+      if (!questionId) {
+        return res.status(400).json({ error: "Question id parameter is required." });
+      }
+
+      const message = req.body?.message ? String(req.body.message).trim().slice(0, 1000) : '';
+
+      const supabase = getSupabase();
+      let questionSnapshot: any = null;
+      if (supabase) {
+        const { data } = await supabase
+          .from('questions')
+          .select('id, question, major, topic, year')
+          .eq('id', questionId)
+          .maybeSingle();
+        questionSnapshot = data;
+      }
+
+      const userRow = supabase ? await getOrCreateSupabaseUser(requesterId, requesterUsername) : null;
+      const reporterLabel = userRow?.full_name
+        ? userRow.full_name
+        : (requesterUsername ? `@${requesterUsername}` : `Telegram ID ${requesterId}`);
+
+      // Persist for a durable admin-facing list, independent of Telegram.
+      if (supabase) {
+        try {
+          const { error: insertErr } = await supabase
+            .from('question_feedback')
+            .insert({
+              question_id: questionId,
+              user_id: userRow?.id || null,
+              telegram_id: requesterId || (userRow?.telegram_id ? String(userRow.telegram_id) : null),
+              message: message || null,
+              created_at: new Date().toISOString()
+            });
+          if (insertErr && insertErr.code !== '42P01') {
+            // 42P01 = undefined_table — schema not migrated yet, non-fatal.
+            console.warn(`[QUESTION_FEEDBACK] Failed to persist feedback for questionId=${questionId}: ${insertErr.message}`);
+          }
+        } catch (persistErr: any) {
+          console.warn(`[QUESTION_FEEDBACK] Unexpected error persisting feedback: ${persistErr?.message}`);
+        }
+      }
+
+      // Notify admins immediately via Telegram — the primary, actionable channel.
+      try {
+        const adminIds = getAdminTelegramIds();
+        const stemPreview = questionSnapshot?.question
+          ? (String(questionSnapshot.question).length > 200 ? String(questionSnapshot.question).slice(0, 200) + '…' : questionSnapshot.question)
+          : '(question text unavailable)';
+
+        const notificationMessage =
+          `⚠️ <b>إبلاغ عن مشكلة بسؤال</b>\n\n` +
+          `🆔 <b>Question ID:</b> <code>${questionId}</code>\n` +
+          (questionSnapshot ? `📚 <b>التصنيف:</b> ${questionSnapshot.major || 'N/A'} • ${questionSnapshot.topic || 'N/A'} • ${questionSnapshot.year || 'N/A'}\n` : '') +
+          `📝 <b>نص السؤال:</b> ${stemPreview}\n\n` +
+          `👤 <b>المستخدم المُبلِّغ:</b> ${reporterLabel}\n` +
+          (message ? `💬 <b>ملاحظة المستخدم:</b> ${message}\n` : `💬 <b>ملاحظة المستخدم:</b> (لم يكتب تفاصيل)\n`) +
+          `\n<i>يمكنك مراجعة السؤال وتعديله من لوحة إدارة بنك الأسئلة باستخدام رقم الـ ID أعلاه.</i>`;
+
+        for (const adminId of adminIds) {
+          if (/^\d+$/.test(adminId)) {
+            await sendTelegramMessage(adminId, notificationMessage);
+          }
+        }
+      } catch (notifyErr: any) {
+        console.error(`[QUESTION_FEEDBACK] Failed to notify admins for questionId=${questionId}:`, notifyErr?.message || notifyErr);
+      }
+
+      console.log(`[QUESTION_FEEDBACK] questionId=${questionId} reporter=${reporterLabel} hasMessage=${Boolean(message)}`);
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/questions/:id/feedback:", err);
+      return res.status(500).json({ error: err.message || "Failed to submit question feedback." });
+    }
+  });
+
   // Phase 3: Question Progress API Endpoints
   app.post("/api/question-progress", async (req, res) => {
     try {
@@ -1034,9 +1755,9 @@ async function startServer() {
         return res.status(400).json({ error: "questionId is required and must be a non-empty string." });
       }
 
-      const validOptionKeys = ['A', 'B', 'C', 'D'];
+      const validOptionKeys = ['A', 'B', 'C', 'D', 'E'];
       if (!selectedAnswer || !validOptionKeys.includes(String(selectedAnswer).toUpperCase().trim())) {
-        return res.status(400).json({ error: "selectedAnswer must be one of A, B, C, or D." });
+        return res.status(400).json({ error: "selectedAnswer must be one of A, B, C, D, or E." });
       }
 
       if (typeof isCorrect !== 'boolean') {
@@ -1176,6 +1897,24 @@ async function startServer() {
         return res.status(400).json({ error: "No questions provided in array." });
       }
 
+      // HARD SAFETY NET: U JO MAJORS QBANK (USMLE/Step Up) explanations and
+      // option-level explanations must NEVER be touched or generated by
+      // AI — this is a firm product requirement, not just a UI convention.
+      // Regardless of which admin screen or future code path calls this
+      // endpoint, if ANY submitted question belongs to the USMLE bank,
+      // refuse outright rather than risk silently appending or duplicating
+      // AI-generated content on top of an admin-authored explanation. The
+      // correct endpoint for that bank is /api/ai/classify-topic, which
+      // never receives or returns explanation data at all.
+      const usmleQuestionIds = questions
+        .filter((q: any) => (q.bankId || q.bank_id) === 'dentistry')
+        .map((q: any) => q.id);
+      if (usmleQuestionIds.length > 0) {
+        return res.status(400).json({
+          error: `Refused: ${usmleQuestionIds.length} question(s) belong to the U JO MAJORS QBANK (dentistry), which never receives AI-generated explanations. Use /api/ai/classify-topic for Topic classification on this bank instead. Affected IDs: ${usmleQuestionIds.slice(0, 5).join(', ')}${usmleQuestionIds.length > 5 ? '...' : ''}`
+        });
+      }
+
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
         return res.status(500).json({ error: "GEMINI_API_KEY environment variable is not configured on the server." });
@@ -1190,7 +1929,7 @@ async function startServer() {
         }
       });
 
-      const SYSTEM_INSTRUCTION = `You are an expert evidence-grounded medical AI verification and classification engine for the U JO Resident MOH Medical Residency Question Bank.
+      const SYSTEM_INSTRUCTION = `You are an expert evidence-grounded medical AI verification and classification engine for the U JO TAJNEED MOH Medical Residency Question Bank.
 
 Your task is:
 1. AUTOMATIC CLINICAL CLASSIFICATION: Classify each medical residency question into its clinical Major specialty (e.g. "Internal Medicine", "General Surgery", "Pediatrics", "Obstetrics & Gynecology", "Psychiatry", "Emergency Medicine", "Family Medicine", "Orthopedics", "Ophthalmology", "ENT"), Topic (e.g. "Cardiology", "Gastroenterology", "Pulmonology", "Nephrology", "Endocrinology", "Neurology", "Rheumatology", "Hematology", "Infectious Disease", "Dermatology"), and Subtopic (e.g. "Ischemic Heart Disease", "Valvular Disease", "Asthma & COPD", "Diabetic Ketoacidosis"). Do NOT return "Unassigned" or "Unassigned Topic" if you can classify the question from its stem and options.
@@ -1205,7 +1944,10 @@ Your task is:
 - The original question stem, options A-D, correctAnswer, and original explanation MUST REMAIN UNCHANGED.
 
 4. MEDICAL UNCERTAINTY HANDLING:
-- If you are uncertain about a clinical rationale or if the question stem lacks detail, set "needsReview": true and provide a "reviewNote" explaining why. Otherwise set "needsReview": false and "reviewNote": "".`;
+- If you are uncertain about a clinical rationale or if the question stem lacks detail, set "needsReview": true and provide a "reviewNote" explaining why. Otherwise set "needsReview": false and "reviewNote": "".
+
+5. CRITICAL COMPLETENESS REQUIREMENT:
+- You will be given a list of N questions, each with a unique "id". Your "results" array MUST contain EXACTLY N entries — one for every single "id" you were given, with no omissions, regardless of how similar or difficult a question is. If you are uncertain about a question, still include it with "needsReview": true rather than leaving it out entirely. An incomplete results array (fewer entries than questions provided) is a failed response.`;
 
       const promptPayload = questions.map((q: any) => ({
         id: q.id,
@@ -1219,63 +1961,131 @@ Your task is:
         year: q.year
       }));
 
-      let response: any = null;
-      let attempts = 0;
-      const maxAttempts = 3;
+      // Reverted back to Gemini per product decision (OpenAI billing setup
+      // was a blocker). Retains the retry/backoff/fallback-model fix from
+      // the earlier forensic investigation: retries BOTH 429 and 503 with
+      // exponential backoff + jitter (~1-2s, 2-4s, 4-8s), and falls back to
+      // gemini-3.7-flash if the primary model keeps failing.
+      const PRIMARY_MODEL = "gemini-3.6-flash";
+      const FALLBACK_MODEL = "gemini-3.7-flash";
+      const MAX_ATTEMPTS_PER_MODEL = 3;
 
-      while (attempts < maxAttempts) {
-        try {
+      const isRetryableError = (err: any): boolean => {
+        const status = err?.status;
+        const code = err?.code;
+        const msg = String(err?.message || '');
+        return (
+          status === 429 ||
+          status === 503 ||
+          code === 503 ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('UNAVAILABLE') ||
+          msg.toLowerCase().includes('high demand') ||
+          msg.toLowerCase().includes('quota')
+        );
+      };
+
+      const backoffDelayMs = (attempt: number): number => {
+        // attempt 1 -> ~1-2s, attempt 2 -> ~2-4s, attempt 3 -> ~4-8s
+        const base = 1000 * Math.pow(2, attempt - 1);
+        const jitter = Math.random() * base;
+        return base + jitter;
+      };
+
+      const callGemini = async (model: string): Promise<{ response: any; attemptsUsed: number; lastError: any }> => {
+        let response: any = null;
+        let lastError: any = null;
+        let attempts = 0;
+
+        while (attempts < MAX_ATTEMPTS_PER_MODEL) {
           attempts++;
-          response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: `Process the following batch of medical residency examination questions. Automatically classify each question by Major, Topic, and Subtopic, generate evidence-grounded optionExplanations for incorrect options, and verify clinical reasoning:\n\n${JSON.stringify(promptPayload, null, 2)}`,
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  results: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        id: { type: Type.STRING },
-                        major: { type: Type.STRING },
-                        topic: { type: Type.STRING },
-                        subtopic: { type: Type.STRING },
-                        optionExplanations: {
-                          type: Type.OBJECT,
-                          properties: {
-                            A: { type: Type.STRING },
-                            B: { type: Type.STRING },
-                            C: { type: Type.STRING },
-                            D: { type: Type.STRING }
-                          }
+          const requestStarted = new Date().toISOString();
+          try {
+            response = await ai.models.generateContent({
+              model,
+              contents: `Process the following batch of medical residency examination questions. Automatically classify each question by Major, Topic, and Subtopic, generate evidence-grounded optionExplanations for incorrect options, and verify clinical reasoning:\n\n${JSON.stringify(promptPayload, null, 2)}`,
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                safetySettings: MEDICAL_CONTENT_SAFETY_SETTINGS,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    results: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          id: { type: Type.STRING },
+                          major: { type: Type.STRING },
+                          topic: { type: Type.STRING },
+                          subtopic: { type: Type.STRING },
+                          optionExplanations: {
+                            type: Type.OBJECT,
+                            properties: {
+                              A: { type: Type.STRING },
+                              B: { type: Type.STRING },
+                              C: { type: Type.STRING },
+                              D: { type: Type.STRING }
+                            }
+                          },
+                          needsReview: { type: Type.BOOLEAN },
+                          reviewNote: { type: Type.STRING }
                         },
-                        needsReview: { type: Type.BOOLEAN },
-                        reviewNote: { type: Type.STRING }
-                      },
-                      required: ["id", "major", "topic", "subtopic", "optionExplanations", "needsReview", "reviewNote"]
+                        required: ["id", "major", "topic", "subtopic", "optionExplanations", "needsReview", "reviewNote"]
+                      }
                     }
-                  }
-                },
-                required: ["results"]
+                  },
+                  required: ["results"]
+                }
               }
+            });
+
+            console.log(`[AI_EXPLANATION] provider=gemini model=${model} endpoint=generateContent requestStarted=${requestStarted} responseStatus=200 retryCount=${attempts - 1}`);
+            return { response, attemptsUsed: attempts, lastError: null };
+          } catch (err: any) {
+            lastError = err;
+            console.log(`[AI_EXPLANATION] provider=gemini model=${model} endpoint=generateContent requestStarted=${requestStarted} responseStatus=${err?.status || 'unknown'} errorCode=${err?.code || 'unknown'} errorStatus=${err?.status === 503 ? 'UNAVAILABLE' : (err?.status === 429 ? 'RESOURCE_EXHAUSTED' : 'unknown')} errorMessage="${String(err?.message || '').slice(0, 200)}" retryCount=${attempts - 1}`);
+
+            if (isRetryableError(err) && attempts < MAX_ATTEMPTS_PER_MODEL) {
+              const delay = backoffDelayMs(attempts);
+              console.warn(`[AI_EXPLANATION] Retrying model=${model} attempt ${attempts + 1}/${MAX_ATTEMPTS_PER_MODEL} in ${Math.round(delay)}ms...`);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+            } else {
+              break;
             }
-          });
-          break; // Success
-        } catch (err: any) {
-          if ((err.status === 429 || err.message?.includes('RESOURCE_EXHAUSTED')) && attempts < maxAttempts) {
-            console.warn(`Gemini API 429 rate limited. Retrying attempt ${attempts}/${maxAttempts} in 2 seconds...`);
-            await new Promise((resolve) => setTimeout(resolve, 2000 * attempts));
-          } else {
-            throw err;
           }
         }
+
+        return { response, attemptsUsed: attempts, lastError };
+      };
+
+      let { response, lastError } = await callGemini(PRIMARY_MODEL);
+
+      // If the primary model exhausted its retries specifically due to a
+      // retryable error, try the fallback model before giving up.
+      if (!response && lastError && isRetryableError(lastError)) {
+        console.warn(`[AI_EXPLANATION] Primary model=${PRIMARY_MODEL} exhausted retries, falling back to model=${FALLBACK_MODEL}`);
+        const fallbackResult = await callGemini(FALLBACK_MODEL);
+        response = fallbackResult.response;
+        lastError = fallbackResult.lastError;
       }
 
-      if (!response || !response.text) {
+      if (!response) {
+        // Production safety: this failure only affects the admin's
+        // classification/explanation-completion tool during import — it
+        // never touches a user's question, answer, score, or session
+        // state, since those are entirely separate systems.
+        const err: any = new Error(
+          lastError && isRetryableError(lastError)
+            ? "AI explanation is temporarily unavailable. Please try again."
+            : (lastError?.message || "Failed to generate AI medical explanations.")
+        );
+        err.status = lastError?.status === 503 ? 503 : (lastError?.status || 502);
+        throw err;
+      }
+
+      if (!response.text) {
         throw new Error("Gemini API returned an empty or missing response.");
       }
 
@@ -1291,39 +2101,50 @@ Your task is:
         throw new Error("Gemini API response contained no results array.");
       }
 
-      const finalResults = questions.map((q: any) => {
-        const item = parsedResults.find((r: any) => r.id === q.id);
-        if (!item) {
-          throw new Error(`Gemini API output was missing result for question ID: ${q.id}`);
-        }
+      // ROOT CAUSE FIX: previously, if Gemini's response was missing even a
+      // SINGLE question's result, this threw and failed the ENTIRE chunk —
+      // discarding every other question in that same request that Gemini
+      // HAD successfully classified. Now, a missing item is simply skipped
+      // (never invented/faked) and the client's own gap-fill retry logic
+      // targets exactly those omitted questions in a smaller follow-up
+      // call, so a partial Gemini response no longer wastes an entire
+      // chunk's worth of otherwise-successful results.
+      const finalResults = questions
+        .map((q: any) => {
+          const item = parsedResults.find((r: any) => r.id === q.id);
+          if (!item) {
+            console.warn(`[AI_EXPLANATION] Gemini output was missing result for question ID: ${q.id} — skipped, not failed, for the client to retry.`);
+            return null;
+          }
 
-        const correctKey = String(q.correctAnswer).toUpperCase();
-        const optionExplanations: Record<string, string> = { ...(item.optionExplanations || {}) };
-        delete optionExplanations[correctKey];
+          const correctKey = String(q.correctAnswer).toUpperCase();
+          const optionExplanations: Record<string, string> = { ...(item.optionExplanations || {}) };
+          delete optionExplanations[correctKey];
 
-        const isUnassigned =
-          !item.major ||
-          item.major === 'Unassigned' ||
-          !item.topic ||
-          item.topic === 'Unassigned Topic';
+          const isUnassigned =
+            !item.major ||
+            item.major === 'Unassigned' ||
+            !item.topic ||
+            item.topic === 'Unassigned Topic';
 
-        const needsRev = isUnassigned ? true : Boolean(item.needsReview);
-        const revNote = isUnassigned
-          ? "NEEDS REVIEW: Question requires clinical classification (Major/Topic)."
-          : (item.reviewNote || "");
+          const needsRev = isUnassigned ? true : Boolean(item.needsReview);
+          const revNote = isUnassigned
+            ? "NEEDS REVIEW: Question requires clinical classification (Major/Topic)."
+            : (item.reviewNote || "");
 
-        return {
-          id: q.id,
-          major: item.major || "Unassigned",
-          topic: item.topic || "Unassigned Topic",
-          subtopic: item.subtopic || "",
-          optionExplanations,
-          evidenceSources: [],
-          groundingQueries: [],
-          needsReview: needsRev,
-          reviewNote: revNote
-        };
-      });
+          return {
+            id: q.id,
+            major: item.major || "Unassigned",
+            topic: item.topic || "Unassigned Topic",
+            subtopic: item.subtopic || "",
+            optionExplanations,
+            evidenceSources: [],
+            groundingQueries: [],
+            needsReview: needsRev,
+            reviewNote: revNote
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null);
 
       return res.json({ results: finalResults });
     } catch (error: any) {
@@ -1334,7 +2155,245 @@ Your task is:
     }
   });
 
-  // Helper to map DB row to FE Block model
+  // POST /api/ai/question-chat - Student-facing AI study assistant, scoped
+  // strictly to the current question and constrained to established,
+  // trusted medical sources/consensus. NOT a general-purpose chatbot: the
+  // system instruction explicitly forbids speculation, unverified claims,
+  // and direct patient-specific clinical advice — this is an exam-prep
+  // educational tool, not clinical decision support. Reuses the same
+  // Gemini retry/backoff pattern as the admin explanation-completion tool
+  // for reliability.
+  // POST /api/ai/classify-topic - Lightweight, narrowly-scoped classifier
+  // used for USMLE-bank imports: given a question and its ALREADY-CHOSEN
+  // Major (selected manually by the admin, never by AI), determines only
+  // the specific clinical Topic. This endpoint NEVER touches, generates,
+  // or reads the question's explanation or optionExplanations — those
+  // fields are not even sent to it, and its response schema has no field
+  // for them. Completely separate from /api/ai/complete-explanations
+  // (used only by the MOH-bank flow), which additionally classifies
+  // major/subtopic and writes optionExplanations.
+  app.post("/api/ai/classify-topic", async (req, res) => {
+    try {
+      const { questions } = req.body;
+      if (!Array.isArray(questions) || questions.length === 0) {
+        return res.status(400).json({ error: "No questions provided in array." });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: "GEMINI_API_KEY environment variable is not configured on the server." });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const SYSTEM_INSTRUCTION = `You are a clinical topic classifier for a USMLE-style medical question bank.
+
+For each question, you are given its stem, answer options, and its Major (clinical specialty), which has ALREADY been determined by a human administrator and must NOT be changed.
+
+Your ONLY job is to determine the most specific, clinically appropriate Topic within that given Major (e.g., within "Internal Medicine": "Cardiology", "Pulmonology", "Nephrology", "Endocrinology", "Gastroenterology", "Infectious Disease", "Hematology/Oncology", "Rheumatology", "Neurology"; within "Surgery": "General Surgery", "Trauma", "Orthopedics", "Urology"; within "Pediatrics": "Neonatology", "Pediatric Infectious Disease", etc.; within "Obstetrics & Gynecology": "Obstetrics", "Gynecologic Oncology", "Reproductive Endocrinology", etc.).
+
+Do NOT generate, modify, or comment on the question's explanation or answer options in any way — you will not even receive that information. Return ONLY the classification.
+
+CRITICAL COMPLETENESS REQUIREMENT: You will be given a list of N questions, each with a unique "id". Your "results" array MUST contain EXACTLY N entries — one for every single "id" you were given, with no omissions, regardless of how similar, short, or ambiguous a question's stem is. Never skip a question because you are uncertain of the exact topic — in that case, pick your single best reasonable guess for that specialty rather than leaving it out entirely. An incomplete results array (fewer entries than questions provided) is a failed response.`;
+
+      const promptPayload = questions.map((q: any) => ({
+        id: q.id,
+        question: q.question,
+        options: q.options,
+        major: q.major
+      }));
+
+      const PRIMARY_MODEL = "gemini-3.6-flash";
+      const FALLBACK_MODEL = "gemini-3.7-flash";
+      const MAX_ATTEMPTS_PER_MODEL = 3;
+
+      const isRetryableError = (err: any): boolean => {
+        const status = err?.status;
+        const msg = String(err?.message || '');
+        return status === 429 || status === 503 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('UNAVAILABLE') || msg.toLowerCase().includes('quota');
+      };
+      const backoffDelayMs = (attempt: number): number => {
+        const base = 1000 * Math.pow(2, attempt - 1);
+        return base + Math.random() * base;
+      };
+
+      const callGemini = async (model: string): Promise<{ response: any; lastError: any }> => {
+        let response: any = null;
+        let lastError: any = null;
+        let attempts = 0;
+
+        while (attempts < MAX_ATTEMPTS_PER_MODEL) {
+          attempts++;
+          try {
+            response = await ai.models.generateContent({
+              model,
+              contents: `Classify the Topic for each of the following questions, given their already-determined Major:\n\n${JSON.stringify(promptPayload, null, 2)}`,
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                safetySettings: MEDICAL_CONTENT_SAFETY_SETTINGS,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    results: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          id: { type: Type.STRING },
+                          topic: { type: Type.STRING }
+                        },
+                        required: ["id", "topic"]
+                      }
+                    }
+                  },
+                  required: ["results"]
+                }
+              }
+            });
+            return { response, lastError: null };
+          } catch (err: any) {
+            lastError = err;
+            if (isRetryableError(err) && attempts < MAX_ATTEMPTS_PER_MODEL) {
+              await new Promise((resolve) => setTimeout(resolve, backoffDelayMs(attempts)));
+            } else {
+              break;
+            }
+          }
+        }
+        return { response, lastError };
+      };
+
+      let { response, lastError } = await callGemini(PRIMARY_MODEL);
+      if (!response && lastError && isRetryableError(lastError)) {
+        const fallback = await callGemini(FALLBACK_MODEL);
+        response = fallback.response;
+        lastError = fallback.lastError;
+      }
+
+      if (!response) {
+        const err: any = new Error(
+          lastError && isRetryableError(lastError)
+            ? "Topic classification is temporarily unavailable. Please try again."
+            : (lastError?.message || "Failed to classify topics.")
+        );
+        err.status = lastError?.status === 503 ? 503 : (lastError?.status || 502);
+        throw err;
+      }
+
+      const parsed = JSON.parse(response.text);
+      const results = Array.isArray(parsed.results) ? parsed.results : [];
+
+      return res.json({ results });
+    } catch (err: any) {
+      console.error("Error in POST /api/ai/classify-topic:", err);
+      return res.status(err.status || 500).json({ error: err.message || "Failed to classify topics." });
+    }
+  });
+
+  app.post("/api/ai/question-chat", async (req, res) => {
+
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const { question, history, message } = req.body || {};
+      if (!message || typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({ error: "message is required." });
+      }
+      if (!question || !question.question) {
+        return res.status(400).json({ error: "question context is required." });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: "GEMINI_API_KEY environment variable is not configured on the server." });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const SYSTEM_INSTRUCTION = `You are a focused medical exam-preparation study assistant embedded inside a question bank (U JO TAJNEED, MOH residency exam prep). A student is asking you about ONE specific practice question they are currently reviewing.
+
+STRICT RULES:
+1. Base every answer ONLY on established, well-accepted medical knowledge as found in standard, trusted references (e.g., major internal medicine/specialty textbooks, UpToDate, StatPearls, official clinical practice guidelines from recognized medical societies). Do NOT speculate, invent mechanisms, or state anything as fact if it is not well-established medical consensus.
+2. If a topic is genuinely controversial, evolving, or not well-established in mainstream guidelines, say so explicitly (e.g., "sources vary on this" or "this is not firmly established") rather than presenting one view as definitive.
+3. This is EDUCATIONAL/EXAM-PREP context only — never give direct clinical advice as if to a real patient (no "you should take X mg of..."). Frame everything in terms of exam concepts, clinical reasoning, and "why this answer is correct/incorrect for this question."
+4. Stay strictly scoped to the CURRENT QUESTION and directly related medical concepts. If the student asks something unrelated to medicine or to this question's topic, politely redirect them back to the question.
+5. Be concise and exam-focused — this is a quick study aid during timed practice, not a long lecture. Prefer short paragraphs or brief bullet points.
+6. Never contradict the question's own stated correct answer and explanation without very strong, clearly-labeled justification — your role is to help the student understand the established reasoning, not to relitigate the question.
+
+CURRENT QUESTION CONTEXT:
+Stem: ${question.question}
+Options: A) ${question.options?.A || ''} B) ${question.options?.B || ''} C) ${question.options?.C || ''} D) ${question.options?.D || ''}
+Correct Answer: ${question.correctAnswer || 'N/A'}
+Official Explanation: ${question.explanation || 'N/A'}
+Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
+
+      const conversationHistory: Array<{ role: string; parts: { text: string }[] }> = Array.isArray(history)
+        ? history.slice(-10).map((h: any) => ({
+            role: h.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: String(h.content || '').slice(0, 2000) }]
+          }))
+        : [];
+
+      const MAX_ATTEMPTS = 3;
+      const isRetryableChatError = (err: any): boolean => {
+        const status = err?.status;
+        const msg = String(err?.message || '');
+        return status === 429 || status === 503 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('UNAVAILABLE') || msg.toLowerCase().includes('quota');
+      };
+      const backoff = (attempt: number) => 1000 * Math.pow(2, attempt - 1) + Math.random() * 1000 * Math.pow(2, attempt - 1);
+
+      let response: any = null;
+      let lastError: any = null;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const chat = ai.chats.create({
+            model: "gemini-3.6-flash",
+            config: { systemInstruction: SYSTEM_INSTRUCTION },
+            history: conversationHistory
+          });
+          response = await chat.sendMessage({ message: message.trim().slice(0, 2000) });
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (isRetryableChatError(err) && attempt < MAX_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, backoff(attempt)));
+          } else {
+            break;
+          }
+        }
+      }
+
+      if (!response) {
+        const err: any = new Error(
+          lastError && isRetryableChatError(lastError)
+            ? "The study assistant is temporarily unavailable. Please try again."
+            : (lastError?.message || "Failed to get a response from the study assistant.")
+        );
+        err.status = lastError?.status || 502;
+        throw err;
+      }
+
+      return res.json({ reply: response.text || '' });
+    } catch (err: any) {
+      console.error("Error in POST /api/ai/question-chat:", err);
+      return res.status(err.status || 500).json({ error: err.message || "Failed to get a response from the study assistant." });
+    }
+  });
+
+
   function mapDbRowToBlock(row: any, userTelegramId?: string) {
     let feStatus: 'ACTIVE' | 'SAVED' | 'COMPLETED' = 'ACTIVE';
     const statusLower = String(row.status || '').toLowerCase();
@@ -1349,7 +2408,7 @@ Your task is:
     return {
       id: row.custom_id || row.id,
       userId: userTelegramId || row.user_id,
-      bankId: row.bank_id || 'moh_bank',
+      bankId: row.bank_id || 'human_medicine',
       bankName: 'MOH Residency Question Bank',
       questionIds: Array.isArray(row.question_ids) ? row.question_ids : [],
       status: feStatus,
@@ -1394,6 +2453,15 @@ Your task is:
         return res.status(500).json({ error: "Failed to resolve or create Supabase user account." });
       }
 
+      // Single-active-session enforcement (see checkAndRegisterSession above).
+      const incomingSessionId = (req.headers['x-session-id'] || req.body?.sessionId || null) as string | null;
+      const sessionCheck = await checkAndRegisterSession(userRow.id, incomingSessionId);
+      if (!sessionCheck.ok) {
+        return res.status(409).json({ error: sessionCheck.reason, code: 'SESSION_CONFLICT' });
+      }
+
+      recordBlockActivity(userRow.id);
+
       const customId = String(blockObj.id || blockObj.customId).trim();
 
       // Security check: Check if block exists and belongs to a different user
@@ -1419,7 +2487,7 @@ Your task is:
       const blockRowData = {
         custom_id: customId,
         user_id: userRow.id,
-        bank_id: blockObj.bankId || blockObj.bank_id || 'moh_bank',
+        bank_id: blockObj.bankId || blockObj.bank_id || 'human_medicine',
         mode: blockObj.filters?.mode || blockObj.mode || 'tutor',
         question_ids: questionIds,
         filters: blockObj.filters || {},
@@ -1955,13 +3023,247 @@ Your task is:
   // Phase 6: Admin Infrastructure & Live Telemetry Endpoints
   let serverAdminConfig = {
     paymentPhoneNumber: '079 812 3456',
-    paymentAccountName: 'Saif Al-Deen (U JO Resident)',
+    paymentAccountName: 'Saif Al-Deen (U JO TAJNEED)',
     subscriptionPrice: 25,
     subscriptionDurationDays: 30,
     paymentInstructions: 'Transfer via Zain Cash or CliQ to the phone number above. Enter your Telegram username and optional transaction reference ID when submitting.'
   };
 
-  // GET /api/admin/metrics
+  // GET /api/admin/flashcard-feedback - admin-only list of all flashcard
+  // feedback (mirrors GET /api/admin/question-feedback exactly).
+  app.get("/api/admin/flashcard-feedback", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ error: "Supabase client not configured." });
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      const isAuthorizedAdmin =
+        (userRow && userRow.role === 'admin') ||
+        verifyServerAdminAuthorization(requesterId) ||
+        verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAuthorizedAdmin) {
+        return res.status(403).json({ error: "Access denied: Administrator privileges required." });
+      }
+
+      const { data: feedbackRows, error } = await supabase
+        .from('flashcard_feedback')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        if (error.code === '42P01') {
+          return res.json({ feedback: [] });
+        }
+        return res.status(500).json({ error: error.message });
+      }
+
+      const flashcardIds = Array.from(new Set((feedbackRows || []).map((r: any) => r.flashcard_id).filter(Boolean)));
+      const cardMap = new Map<string, any>();
+      if (flashcardIds.length > 0) {
+        const { data: cRows } = await supabase
+          .from('flashcards')
+          .select('id, question, answer')
+          .in('id', flashcardIds);
+        (cRows || []).forEach((c: any) => cardMap.set(String(c.id), c));
+      }
+
+      const userIds = Array.from(new Set((feedbackRows || []).map((r: any) => r.user_id).filter(Boolean)));
+      const userMap = new Map<string, any>();
+      if (userIds.length > 0) {
+        const { data: uRows } = await supabase
+          .from('users')
+          .select('id, full_name, telegram_username, telegram_id')
+          .in('id', userIds);
+        (uRows || []).forEach((u: any) => userMap.set(String(u.id), u));
+      }
+
+      const mapped = (feedbackRows || []).map((row: any) => {
+        const c = cardMap.get(String(row.flashcard_id));
+        const reporter = row.user_id ? userMap.get(String(row.user_id)) : null;
+        return {
+          id: row.id,
+          flashcardId: row.flashcard_id,
+          flashcardQuestionPreview: c?.question ? String(c.question).slice(0, 200) : null,
+          flashcardAnswerPreview: c?.answer ? String(c.answer).slice(0, 200) : null,
+          message: row.message || null,
+          reporterName: reporter?.full_name || (reporter?.telegram_username ? `@${reporter.telegram_username}` : null) || row.telegram_id || 'Unknown',
+          resolved: Boolean(row.resolved),
+          createdAt: row.created_at
+        };
+      });
+
+      return res.json({ feedback: mapped });
+    } catch (err: any) {
+      console.error("Error in GET /api/admin/flashcard-feedback:", err);
+      return res.status(500).json({ error: err.message || "Failed to fetch flashcard feedback." });
+    }
+  });
+
+  // POST /api/admin/flashcard-feedback/:id/resolve
+  app.post("/api/admin/flashcard-feedback/:id/resolve", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ error: "Supabase client not configured." });
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      const isAuthorizedAdmin =
+        (userRow && userRow.role === 'admin') ||
+        verifyServerAdminAuthorization(requesterId) ||
+        verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAuthorizedAdmin) {
+        return res.status(403).json({ error: "Access denied: Administrator privileges required." });
+      }
+
+      const feedbackId = req.params.id;
+      const resolvedValue = req.body?.resolved !== false;
+
+      const { error } = await supabase
+        .from('flashcard_feedback')
+        .update({ resolved: resolvedValue })
+        .eq('id', feedbackId);
+
+      if (error) return res.status(500).json({ error: error.message });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/admin/flashcard-feedback/:id/resolve:", err);
+      return res.status(500).json({ error: err.message || "Failed to update feedback status." });
+    }
+  });
+
+  // GET /api/admin/question-feedback - admin-only list of all feedback
+  // submitted by users on questions, so the admin can jump straight to
+  // fixing the flagged question. Schema-safe: if question_feedback doesn't
+  // exist yet, returns an empty list rather than erroring the dashboard.
+  app.get("/api/admin/question-feedback", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      if (!requesterId && !requesterUsername) {
+        return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ error: "Supabase client not configured." });
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      const isAuthorizedAdmin =
+        (userRow && userRow.role === 'admin') ||
+        verifyServerAdminAuthorization(requesterId) ||
+        verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAuthorizedAdmin) {
+        return res.status(403).json({ error: "Access denied: Administrator privileges required." });
+      }
+
+      const { data: feedbackRows, error } = await supabase
+        .from('question_feedback')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        if (error.code === '42P01') {
+          // Table not migrated yet — treat as "no feedback" rather than an error.
+          return res.json({ feedback: [] });
+        }
+        return res.status(500).json({ error: error.message });
+      }
+
+      const questionIds = Array.from(new Set((feedbackRows || []).map((r: any) => r.question_id).filter(Boolean)));
+      const questionMap = new Map<string, any>();
+      if (questionIds.length > 0) {
+        const { data: qRows } = await supabase
+          .from('questions')
+          .select('id, question, major, topic, year')
+          .in('id', questionIds);
+        (qRows || []).forEach((q: any) => questionMap.set(String(q.id), q));
+      }
+
+      const userIds = Array.from(new Set((feedbackRows || []).map((r: any) => r.user_id).filter(Boolean)));
+      const userMap = new Map<string, any>();
+      if (userIds.length > 0) {
+        const { data: uRows } = await supabase
+          .from('users')
+          .select('id, full_name, telegram_username, telegram_id')
+          .in('id', userIds);
+        (uRows || []).forEach((u: any) => userMap.set(String(u.id), u));
+      }
+
+      const mapped = (feedbackRows || []).map((row: any) => {
+        const q = questionMap.get(String(row.question_id));
+        const reporter = row.user_id ? userMap.get(String(row.user_id)) : null;
+        return {
+          id: row.id,
+          questionId: row.question_id,
+          questionPreview: q?.question ? String(q.question).slice(0, 200) : null,
+          questionMajor: q?.major || null,
+          questionTopic: q?.topic || null,
+          questionYear: q?.year || null,
+          message: row.message || null,
+          reporterName: reporter?.full_name || (reporter?.telegram_username ? `@${reporter.telegram_username}` : null) || row.telegram_id || 'Unknown',
+          resolved: Boolean(row.resolved),
+          createdAt: row.created_at
+        };
+      });
+
+      return res.json({ feedback: mapped });
+    } catch (err: any) {
+      console.error("Error in GET /api/admin/question-feedback:", err);
+      return res.status(500).json({ error: err.message || "Failed to fetch question feedback." });
+    }
+  });
+
+  // POST /api/admin/question-feedback/:id/resolve - marks a feedback entry
+  // as handled (does not touch the underlying question — purely a
+  // dashboard bookkeeping flag).
+  app.post("/api/admin/question-feedback/:id/resolve", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ error: "Supabase client not configured." });
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      const isAuthorizedAdmin =
+        (userRow && userRow.role === 'admin') ||
+        verifyServerAdminAuthorization(requesterId) ||
+        verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAuthorizedAdmin) {
+        return res.status(403).json({ error: "Access denied: Administrator privileges required." });
+      }
+
+      const feedbackId = req.params.id;
+      const resolvedValue = req.body?.resolved !== false;
+
+      const { error } = await supabase
+        .from('question_feedback')
+        .update({ resolved: resolvedValue })
+        .eq('id', feedbackId);
+
+      if (error) return res.status(500).json({ error: error.message });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/admin/question-feedback/:id/resolve:", err);
+      return res.status(500).json({ error: err.message || "Failed to update feedback status." });
+    }
+  });
+
   app.get("/api/admin/metrics", async (req, res) => {
     try {
       const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
@@ -2072,9 +3374,9 @@ Your task is:
       if (search) {
         const qStr = String(search).trim();
         if (/^\d+$/.test(qStr)) {
-          query = query.or(`telegram_id.eq.${parseInt(qStr, 10)},telegram_username.ilike.%${qStr}%,full_name.ilike.%${qStr}%`);
+          query = query.or(`telegram_id.eq.${parseInt(qStr, 10)},telegram_username.ilike.%${qStr}%,full_name.ilike.%${qStr}%,email.ilike.%${qStr}%`);
         } else {
-          query = query.or(`telegram_username.ilike.%${qStr}%,full_name.ilike.%${qStr}%`);
+          query = query.or(`telegram_username.ilike.%${qStr}%,full_name.ilike.%${qStr}%,email.ilike.%${qStr}%`);
         }
       }
 
@@ -2084,7 +3386,22 @@ Your task is:
         return res.status(500).json({ error: error.message });
       }
 
-      const { data: subs } = await supabase.from('subscriptions').select('*');
+      // ROOT CAUSE FIX (Cancel Subscription button not flipping): this query
+      // previously had no ordering, and the dedup logic below preferred ANY
+      // row with status='active' over a more recent cancelled/expired row,
+      // regardless of which one was actually newest. A user with more than
+      // one subscriptions row (common after repeated approve/cancel/
+      // re-approve cycles during testing) would keep showing as ACTIVE here
+      // even after a genuinely successful, confirmed cancellation, because
+      // an older leftover 'active' row was still winning the dedup. This now
+      // orders by created_at descending and keeps only the first (i.e. most
+      // recent) row per user — the same "one authoritative row per user"
+      // rule already used by resolveAuthoritativeUserSubscription() and the
+      // single-user detail endpoint, so all three agree everywhere.
+      const { data: subs } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .order('created_at', { ascending: false });
       const subsMap = new Map<string, any>();
       if (subs) {
         subs.forEach((s: any) => {
@@ -2093,12 +3410,41 @@ Your task is:
 
           if (s.user_id) {
             const key = String(s.user_id);
-            const existing = subsMap.get(key);
-            if (!existing || (!existing.isActiveSub && isSubActive)) {
+            // Rows arrive newest-first due to the ordering above, so the
+            // FIRST row seen for a given user_id is authoritative — do not
+            // let an older row (processed later) override it, active or not.
+            if (!subsMap.has(key)) {
               subsMap.set(key, subObj);
             }
           }
         });
+      }
+
+      // ROOT CAUSE FIX (Solved Questions always showing 0): the Admin
+      // Dashboard user list previously displayed a "Solved Questions" count
+      // computed entirely from localStorage on the ADMIN'S OWN device
+      // (getUserDetails -> getUserStudyStats -> getAllStoredBlocks, all
+      // client-side only, never touching Supabase). Telegram's in-app
+      // WebView uses a separate, isolated storage partition from any
+      // regular browser on the same device, so that localStorage was
+      // essentially always empty there — showing 0 for every user
+      // regardless of their real progress. This aggregates the real solved
+      // count per user directly from Supabase in one query, so it is
+      // identical and authoritative in every environment.
+      const solvedCountMap = new Map<string, number>();
+      try {
+        const { data: progressRows } = await supabase
+          .from('question_progress')
+          .select('user_id');
+        if (progressRows) {
+          progressRows.forEach((row: any) => {
+            if (!row.user_id) return;
+            const key = String(row.user_id);
+            solvedCountMap.set(key, (solvedCountMap.get(key) || 0) + 1);
+          });
+        }
+      } catch (progressErr: any) {
+        console.warn(`[SUB_AUTH] Failed to aggregate solved-question counts for admin user list: ${progressErr?.message}`);
       }
 
       const mappedUsers = (users || []).map((u: any) => {
@@ -2124,11 +3470,15 @@ Your task is:
           username: u.telegram_username || undefined,
           firstName,
           lastName,
+          email: u.email || null,
           role: (u.role || 'user') as 'user' | 'admin',
           isActive: isUserAccountActive(u),
           firstSeenAt: u.created_at || new Date().toISOString(),
           lastActiveAt: u.updated_at || new Date().toISOString(),
-          subscriptionStatus: subStatus
+          subscriptionStatus: subStatus,
+          solvedCount: solvedCountMap.get(String(u.id)) || 0,
+          recentBlockActivity: (blockActivityByUser.get(String(u.id)) || []).filter((t) => Date.now() - t < BEHAVIOR_WINDOW_MS).length,
+          suspiciousActivity: (blockActivityByUser.get(String(u.id)) || []).filter((t) => Date.now() - t < BEHAVIOR_WINDOW_MS).length > BEHAVIOR_SUSPICIOUS_THRESHOLD
         };
       });
 
@@ -2217,6 +3567,8 @@ Your task is:
         username: targetUser.telegram_username || undefined,
         firstName: parts[0] || 'Resident',
         lastName: parts.slice(1).join(' ') || '',
+        fullName: targetUser.full_name || null,
+        email: targetUser.email || null,
         role: (targetUser.role || 'user') as 'user' | 'admin',
         isActive: targetUser.is_active !== false,
         firstSeenAt: targetUser.created_at || new Date().toISOString(),
@@ -2226,14 +3578,14 @@ Your task is:
       const latestSub = subscriptions && subscriptions.length > 0 ? subscriptions[0] : null;
       const subscriptionObj = latestSub ? {
         userId: userObj.telegramId,
-        bankId: latestSub.bank_id || 'moh_bank',
+        bankId: latestSub.bank_id || 'human_medicine',
         status: (String(latestSub.status).toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'EXPIRED') as any,
         plan: latestSub.plan || 'MOH Pass',
         startDate: latestSub.created_at,
         expiryDate: latestSub.expires_at
       } : {
         userId: userObj.telegramId,
-        bankId: 'moh_bank',
+        bankId: 'human_medicine',
         status: 'INACTIVE' as any,
         plan: 'No Active Subscription'
       };
@@ -2314,14 +3666,44 @@ Your task is:
         if (targetUser.telegram_id) disabledUserIds.delete(String(targetUser.telegram_id));
       }
 
-      const { data: updatedUser } = await supabase
+      // ROOT CAUSE FIX: this previously only updated `updated_at` and relied
+      // entirely on the in-memory `disabledUserIds` Set above to represent
+      // the disabled/enabled state. That Set lives only in server RAM and is
+      // wiped on every restart or redeploy, so the account-active toggle
+      // silently reverted to "active" after any deploy — while the button in
+      // the Admin Dashboard, which reads `isActive` from this same Supabase
+      // row via isUserAccountActive(), never reflected the real intended
+      // state once the process restarted. `is_active` is now written to the
+      // actual database row, matching what isUserAccountActive() already
+      // reads, so the state survives restarts and both server and DB agree.
+      // Schema-safe: if the `is_active` column somehow doesn't exist, retry
+      // without it so the request doesn't hard-fail, but log clearly so this
+      // is diagnosable — the in-memory Set still provides same-process
+      // coverage as a fallback in that case.
+      let { data: updatedUser, error: statusUpdateErr } = await supabase
         .from('users')
         .update({
+          is_active: newActiveStatus,
           updated_at: new Date().toISOString()
         })
         .eq('id', targetUser.id)
         .select()
         .maybeSingle();
+
+      if (statusUpdateErr && statusUpdateErr.code === '42703') {
+        console.warn(`[SUB_AUTH] users.is_active column not found — falling back to in-memory-only account status for userDbId=${targetUser.id}. This will NOT survive a server restart.`);
+        const retry = await supabase
+          .from('users')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', targetUser.id)
+          .select()
+          .maybeSingle();
+        updatedUser = retry.data;
+      } else if (statusUpdateErr) {
+        console.error(`[SUB_AUTH] Failed to persist is_active for userDbId=${targetUser.id}: ${statusUpdateErr.message}`);
+      }
+
+      console.log(`[SUB_AUTH] userDbId=${targetUser.id} telegramId=${targetUser.telegram_id} is_active=${newActiveStatus} persisted=${!statusUpdateErr}`);
 
       return res.json({
         success: true,
@@ -2378,7 +3760,6 @@ Your task is:
         .from('subscriptions')
         .select('*')
         .eq('user_id', targetUser.id)
-        .eq('bank_id', 'moh_bank')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -2398,7 +3779,6 @@ Your task is:
           .update({
             status: 'active',
             user_id: targetUser.id,
-            bank_id: 'moh_bank',
             expires_at: expiresAt,
             updated_at: now
           })
@@ -2413,7 +3793,6 @@ Your task is:
           .from('subscriptions')
           .insert({
             user_id: targetUser.id,
-            bank_id: 'moh_bank',
             status: 'active',
             started_at: now,
             created_at: now,
@@ -2425,6 +3804,19 @@ Your task is:
 
         if (insertErr) return res.status(500).json({ error: insertErr.message });
         subscriptionRow = insertedSub;
+      }
+
+      const logTag = existingSub && String(existingSub.status).toLowerCase() === 'active' ? 'SUB_EXTEND' : 'SUB_ACTIVATE';
+      console.log(`[${logTag}] userDbId=${targetUser.id} telegramId=${tgIdStr} subscriptionId=${subscriptionRow.id} days=${days} expiresAt=${expiresAt}`);
+
+      // PART 6 requirement: notify the user their access was activated/extended.
+      try {
+        if (targetUser.telegram_id) {
+          const msg = `✅ تم تفعيل/تمديد اشتراكك من قبل الإدارة.\n📅 ينتهي الاشتراك في: ${new Date(expiresAt).toLocaleDateString('en-GB')}\n\nيمكنك الآن الدخول إلى المنصة.`;
+          await sendTelegramMessage(targetUser.telegram_id, msg);
+        }
+      } catch (notifyErr: any) {
+        console.error(`[${logTag}] Telegram notification failed for userDbId=${targetUser.id}:`, notifyErr?.message || notifyErr);
       }
 
       return res.json({ success: true, subscription: subscriptionRow });
@@ -2472,21 +3864,26 @@ Your task is:
 
       const tgIdStr = String(targetUser.telegram_id || targetUserId);
 
-      // Update existing subscriptions to cancelled / inactive
+      // Update existing subscriptions to expired (DB check constraint only allows
+      // 'active' | 'expired' | 'pending' | 'rejected' - 'cancelled' is NOT a valid value
+      // and silently fails the constraint if used).
       const now = new Date().toISOString();
-      const { error: cancelErr } = await supabase
+      const epoch = new Date(0).toISOString();
+      const { error: cancelErr, data: cancelledRows } = await supabase
         .from('subscriptions')
         .update({
-          status: 'cancelled',
-          expires_at: now,
+          status: 'expired',
+          expires_at: epoch,
           updated_at: now
         })
-        .eq('user_id', targetUser.id);
+        .eq('user_id', targetUser.id)
+        .select();
 
-      console.log(`[SUB_CANCEL] userDbId=${targetUser.id} telegramId=${tgIdStr}`);
+      console.log(`[SUB_CANCEL] userDbId=${targetUser.id} telegramId=${tgIdStr} rowsAffected=${cancelledRows ? cancelledRows.length : 0}`);
 
       if (cancelErr) {
         console.error("Error updating subscription status in Supabase:", cancelErr.message);
+        return res.status(500).json({ error: `Failed to cancel subscription: ${cancelErr.message}` });
       }
 
       try {
@@ -2743,6 +4140,23 @@ function isUserAccountActive(userRow: any): boolean {
     }
   }
 
+  // Acknowledges a button press (removes the loading spinner Telegram
+  // shows on the button until this is called). Needed for the bank-choice
+  // inline buttons in the webhook handler below.
+  async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+    const token = getTelegramBotToken();
+    if (!token || !callbackQueryId) return;
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackQueryId, text: text || '' })
+      });
+    } catch (err) {
+      console.error('[Telegram Bot] Error answering callback query:', err);
+    }
+  }
+
   // GET /api/admin/payments/:paymentId/proof - Serve/Proxy payment proof image securely by payment ID or custom_id
   app.get("/api/admin/payments/:paymentId/proof", async (req, res) => {
     try {
@@ -2986,8 +4400,33 @@ function isUserAccountActive(userRow: any): boolean {
       }
 
       const body = req.body || {};
-      const amountRaw = body.amount ?? body.amount_syp ?? body.amountSyp ?? serverAdminConfig.subscriptionPrice ?? 25;
-      const amount = Number(amountRaw) > 0 ? Number(amountRaw) : 25;
+
+      // REQUIRED now: Human Medicine and Dentistry each have their own
+      // price and their own subscription — a payment with no bankId is
+      // ambiguous and must be rejected rather than silently defaulting.
+      const bankId = String(body.bankId || body.bank_id || '').trim();
+      if (!bankId || !['human_medicine', 'dentistry'].includes(bankId)) {
+        return res.status(400).json({
+          success: false,
+          error: "bankId is required and must be 'human_medicine' or 'dentistry'."
+        });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) {
+        return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      }
+
+      // Resolve the price authoritatively from bank_pricing — never trust
+      // a client-supplied amount, so a modified request can't under-report
+      // what was actually paid.
+      const { data: pricingRow } = await supabase
+        .from('bank_pricing')
+        .select('price, payment_number, payment_name')
+        .eq('bank_id', bankId)
+        .maybeSingle();
+
+      const amount = pricingRow ? Number(pricingRow.price) : (Number(body.amount ?? body.amount_syp) || 25);
 
       const paymentMethod = String(body.paymentMethod || body.payment_method || body.method || 'Zain Cash').trim();
       const transactionRef = body.transactionRef || body.transaction_ref || body.reference || body.ref ? String(body.transactionRef || body.transaction_ref || body.reference || body.ref).trim() : null;
@@ -2996,11 +4435,6 @@ function isUserAccountActive(userRow: any): boolean {
 
       // Fallback for proof file if neither URL nor ID is specified (e.g. text receipt)
       const finalProofFileId = proofFileId || proofFileUrl || 'telegram_photo_receipt';
-
-      const supabase = getSupabase();
-      if (!supabase) {
-        return res.status(500).json({ success: false, error: "Supabase client not configured." });
-      }
 
       // Resolve Supabase user record via existing helper
       const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
@@ -3014,6 +4448,7 @@ function isUserAccountActive(userRow: any): boolean {
       const paymentRowData = {
         custom_id: customId,
         user_id: userRow.id,
+        bank_id: bankId,
         amount_syp: amount,
         payment_method: paymentMethod,
         transaction_ref: transactionRef,
@@ -3188,13 +4623,34 @@ function isUserAccountActive(userRow: any): boolean {
       const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
       if (!userRow) return res.json({ success: true, subscribed: false, status: 'INACTIVE', subscription: null });
 
-      const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'moh_bank');
+      // bankId is now REQUIRED for a meaningful answer, since Human
+      // Medicine and Dentistry each have their own independent
+      // subscription. Callers that don't specify one (older code paths)
+      // get status for every bank instead of one ambiguous answer.
+      const requestedBankId = (req.query.bankId || req.query.bank_id || '') as string;
+
+      if (requestedBankId) {
+        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, requestedBankId);
+        return res.json({
+          success: true,
+          bankId: requestedBankId,
+          subscribed: subAuth.isSubscribed,
+          status: subAuth.normalizedStatus,
+          subscription: subAuth.subscription
+        });
+      }
+
+      const [humanMed, dent] = await Promise.all([
+        resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine'),
+        resolveAuthoritativeUserSubscription(userRow.id, 'dentistry')
+      ]);
 
       return res.json({
         success: true,
-        subscribed: subAuth.isSubscribed,
-        status: subAuth.normalizedStatus,
-        subscription: subAuth.subscription
+        subscribed: humanMed.isSubscribed || dent.isSubscribed,
+        status: humanMed.isSubscribed ? humanMed.normalizedStatus : dent.normalizedStatus,
+        subscription: humanMed.isSubscribed ? humanMed.subscription : dent.subscription,
+        subscriptionsByBank: { human_medicine: humanMed, dentistry: dent }
       });
     } catch (err: any) {
       console.error("Error in GET /api/subscriptions/status:", err);
@@ -3286,7 +4742,11 @@ function isUserAccountActive(userRow: any): boolean {
       if (!existingPayment) return res.status(404).json({ error: "Payment request not found." });
 
       const currentPaymentStatus = String(existingPayment.status || '').toUpperCase();
-      if (currentPaymentStatus !== 'PENDING' && currentPaymentStatus !== 'APPROVED') {
+      if (currentPaymentStatus !== 'PENDING') {
+        // PART 3 fix: no longer permits re-approving an already-APPROVED payment.
+        // The old check allowed APPROVED payments through too, which meant an
+        // accidental double-click could re-run subscription writes + a second
+        // Telegram notification for the same payment.
         return res.status(400).json({ error: `Payment request has already been reviewed (status: ${existingPayment.status}).` });
       }
 
@@ -3313,15 +4773,32 @@ function isUserAccountActive(userRow: any): boolean {
       }
 
       const now = new Date().toISOString();
-      const durationDays = Number(serverAdminConfig.subscriptionDurationDays) || 30;
+
+      // Duration and price come from this payment's specific bank — Human
+      // Medicine and Dentistry can have different durations/prices, and
+      // must never fall back to a single global default.
+      const paymentBankId = String(existingPayment.bank_id || '').trim();
+      if (!paymentBankId) {
+        return res.status(400).json({ error: "This payment has no bank_id recorded — cannot determine which subscription to activate." });
+      }
+
+      const { data: pricingRow } = await supabase
+        .from('bank_pricing')
+        .select('duration_days')
+        .eq('bank_id', paymentBankId)
+        .maybeSingle();
+
+      const durationDays = Number(pricingRow?.duration_days) || Number(serverAdminConfig.subscriptionDurationDays) || 30;
       const expiresAt = new Date(Date.now() + durationDays * 24 * 3600 * 1000).toISOString();
 
-      // Find any existing subscription for the canonical user UUID
+      // Find any existing subscription for this SPECIFIC user+bank pair —
+      // never just "any subscription for this user" — a user's Dentistry
+      // subscription must never be touched by a Human Medicine payment.
       const { data: existingSub } = await supabase
         .from('subscriptions')
         .select('*')
         .eq('user_id', payerUser.id)
-        .eq('bank_id', 'moh_bank')
+        .eq('bank_id', paymentBankId)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -3332,10 +4809,9 @@ function isUserAccountActive(userRow: any): boolean {
         const { data: updatedSub, error: subUpdateErr } = await supabase
           .from('subscriptions')
           .update({
-            status: 'active',
+            status: 'ACTIVE',
             user_id: payerUser.id,
-            bank_id: 'moh_bank',
-            started_at: now,
+            bank_id: paymentBankId,
             expires_at: expiresAt,
             updated_at: now
           })
@@ -3353,9 +4829,8 @@ function isUserAccountActive(userRow: any): boolean {
           .from('subscriptions')
           .insert({
             user_id: payerUser.id,
-            bank_id: 'moh_bank',
-            status: 'active',
-            started_at: now,
+            bank_id: paymentBankId,
+            status: 'ACTIVE',
             expires_at: expiresAt,
             created_at: now,
             updated_at: now
@@ -3370,43 +4845,80 @@ function isUserAccountActive(userRow: any): boolean {
         subscriptionRow = insertedSub;
       }
 
-      console.log(`[SUB_APPROVE] userDbId=${payerUser.id} telegramId=${payerUser.telegram_id} expiresAt=${expiresAt}`);
+      console.log(`[SUB_APPROVE] userDbId=${payerUser.id} telegramId=${payerUser.telegram_id} subscriptionId=${subscriptionRow.id} paymentId=${existingPayment.id} expiresAt=${expiresAt}`);
 
-      // Update payment record to APPROVED (linked to resolved user UUID)
-      const { data: updatedPayment, error: updateErr } = await supabase
-        .from('payments')
-        .update({
-          status: 'APPROVED',
-          user_id: payerUser.id,
-          reviewed_by: userRow.id,
-          reviewed_at: now,
-          updated_at: now
-        })
-        .eq('id', existingPayment.id)
-        .select()
-        .single();
+      // Update payment record to APPROVED (linked to resolved user UUID).
+      // PART 14: reviewer fields (reviewed_by/reviewed_at) are only persisted if the
+      // schema actually supports them — see updatePaymentReviewStatus().
+      const { data: updatedPayment, error: updateErr, reviewerFieldsPersisted } =
+        await updatePaymentReviewStatus(supabase, existingPayment.id, 'APPROVED', userRow.id, payerUser.id);
 
       if (updateErr) {
-        console.error("Error updating payment in Supabase:", updateErr.message);
-        return res.status(500).json({ error: `Subscription was activated, but updating payment status failed: ${updateErr.message}` });
+        // PART 3 fix: this is the exact partial-success state — the subscription
+        // is genuinely ACTIVE at this point, but the payment row could not be
+        // marked APPROVED. We report this explicitly instead of a generic failure,
+        // and include machine-readable fields so the frontend can show the real state.
+        console.error(
+          `[SUB_APPROVE_PARTIAL] userDbId=${payerUser.id} paymentId=${existingPayment.id} subscriptionId=${subscriptionRow.id} error="${updateErr.message}"`
+        );
+        return res.status(500).json({
+          error: `Subscription was activated, but updating the payment status failed: ${updateErr.message}`,
+          partialSuccess: true,
+          subscriptionActivated: true,
+          paymentUpdated: false,
+          subscription: subscriptionRow
+        });
       }
 
-      // Attempt to send automated Telegram confirmation message to the user
+      if (!reviewerFieldsPersisted) {
+        console.warn(`[SUB_APPROVE] paymentId=${existingPayment.id} approved successfully, but reviewer metadata (reviewed_by/reviewed_at) was not stored — schema does not have these columns.`);
+      }
+
+      // Attempt to send automated Telegram confirmation message to the user.
+      // Mirrors bot.py's monitor_payment() approval flow exactly: send the
+      // plain success confirmation first, THEN check profile completeness
+      // (Supabase is authoritative — never assume) and only send the
+      // WebApp button once the profile is actually complete. If name
+      // and/or email are still missing, prompt for exactly what's missing
+      // instead, so the app link is never sent before the account is
+      // actually usable.
       try {
         let telegramChatId = existingPayment.telegram_user_id || updatedPayment.telegram_user_id || payerUser.telegram_id;
         if (telegramChatId) {
-          const approvalMsg = `🎉 تمت الموافقة على طلب الدفع الخاص بك!\n\n✅ تم تفعيل اشتراكك في U JO Resident.\n\nيمكنك الآن الدخول إلى المنصة.`;
-          const replyMarkup = {
-            inline_keyboard: [
-              [{ text: "🩺 فتح U JO Resident", url: "https://t.me/UJOResidentBot" }]
-            ]
-          };
-          await sendTelegramMessage(telegramChatId, approvalMsg, replyMarkup);
+          const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://u-jo-resident.run.app';
+
+          await sendTelegramMessage(
+            telegramChatId,
+            `🎉 تم الاشتراك بنجاح!\n\n✅ تم تفعيل اشتراكك في U JO TAJNEED.\n📅 ينتهي الاشتراك في: ${new Date(expiresAt).toLocaleDateString('en-GB')}`
+          );
+
+          const hasName = Boolean(payerUser.full_name);
+          const hasEmail = Boolean(payerUser.email);
+
+          if (hasName && hasEmail) {
+            const replyMarkup = {
+              inline_keyboard: [
+                [{ text: "🩺 فتح U JO TAJNEED", web_app: { url: appUrl } }]
+              ]
+            };
+            await sendTelegramMessage(telegramChatId, "بياناتك مكتملة بالفعل — تفضل بالدخول إلى U JO TAJNEED:", replyMarkup);
+          } else if (!hasName && !hasEmail) {
+            await sendTelegramMessage(
+              telegramChatId,
+              "لإكمال بيانات حسابك، يرجى إرسال:\n1. الاسم الثلاثي باللغة الإنجليزية\n2. بريدك الإلكتروني\n\nمثال:\nAhmad Mohammad Ali\nahmad@example.com"
+            );
+          } else if (!hasName) {
+            await sendTelegramMessage(telegramChatId, "يرجى إرسال اسمك الثلاثي باللغة الإنجليزية.\n\nمثال: Ahmad Mohammad Ali");
+          } else {
+            await sendTelegramMessage(telegramChatId, "يرجى إرسال بريدك الإلكتروني.\n\nمثال: ahmad@example.com");
+          }
+
+          console.log(`[SUB_APPROVE] Telegram confirmation sent to chatId=${telegramChatId}, profileComplete=${hasName && hasEmail}`);
         } else {
-          console.warn("[Telegram Bot] Payment approved, but telegramChatId could not be resolved for notification.");
+          console.warn(`[SUB_APPROVE] paymentId=${existingPayment.id} approved, but telegramChatId could not be resolved for notification.`);
         }
-      } catch (notifyErr) {
-        console.error("Error sending Telegram approval notification:", notifyErr);
+      } catch (notifyErr: any) {
+        console.error(`[SUB_APPROVE] Telegram notification failed for paymentId=${existingPayment.id}:`, notifyErr?.message || notifyErr);
       }
 
       return res.json({
@@ -3461,22 +4973,22 @@ function isUserAccountActive(userRow: any): boolean {
         return res.status(400).json({ error: `Payment request has already been reviewed (status: ${existingPayment.status}).` });
       }
 
-      const now = new Date().toISOString();
-
       // Rejecting a payment never touches subscriptions.
-      const { data: updatedPayment, error: updateErr } = await supabase
-        .from('payments')
-        .update({
-          status: 'REJECTED',
-          reviewed_by: userRow.id,
-          reviewed_at: now,
-          updated_at: now
-        })
-        .eq('id', existingPayment.id)
-        .select()
-        .single();
+      // PART 14: same schema-safe helper as approve, so reject can't fail
+      // silently on the same optional reviewer columns.
+      const { data: updatedPayment, error: updateErr, reviewerFieldsPersisted } =
+        await updatePaymentReviewStatus(supabase, existingPayment.id, 'REJECTED', userRow.id);
 
-      if (updateErr) return res.status(500).json({ error: updateErr.message });
+      if (updateErr) {
+        console.error(`[SUB_REJECT] paymentId=${existingPayment.id} error="${updateErr.message}"`);
+        return res.status(500).json({ error: updateErr.message });
+      }
+
+      if (!reviewerFieldsPersisted) {
+        console.warn(`[SUB_REJECT] paymentId=${existingPayment.id} rejected successfully, but reviewer metadata was not stored — schema does not have these columns.`);
+      }
+
+      console.log(`[SUB_REJECT] paymentId=${existingPayment.id} telegramId=${existingPayment.telegram_user_id || 'N/A'}`);
 
       // Send rejection Telegram message to user
       try {
@@ -3522,6 +5034,77 @@ function isUserAccountActive(userRow: any): boolean {
       const update = req.body;
       if (!update) return res.status(200).send("OK");
 
+      const supabase = getSupabase();
+      if (!supabase) return res.status(200).send("OK (Database unavailable)");
+
+      const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://u-jo-tajneed.onrender.com';
+
+      const BANK_LABELS: Record<string, string> = {
+        human_medicine: 'الطب البشري',
+        dentistry: 'طب الأسنان'
+      };
+
+      const getBankPricing = async (bankId: string) => {
+        const { data } = await supabase
+          .from('bank_pricing')
+          .select('*')
+          .eq('bank_id', bankId)
+          .maybeSingle();
+        return data;
+      };
+
+      const siteButton = () => ({
+        inline_keyboard: [[{ text: "🩺 فتح U JO TAJNEED", web_app: { url: appUrl } }]]
+      });
+
+      const promptForMissingProfile = async (chatIdArg: string | number, needName: boolean, needEmail: boolean) => {
+        if (needName && needEmail) {
+          await sendTelegramMessage(chatIdArg,
+            "لإكمال بيانات حسابك، يرجى إرسال:\n1. الاسم الثلاثي باللغة الإنجليزية\n2. بريدك الإلكتروني\n\nمثال:\nAhmad Mohammad Ali\nahmad@example.com"
+          );
+        } else if (needName) {
+          await sendTelegramMessage(chatIdArg, "يرجى إرسال اسمك الثلاثي باللغة الإنجليزية.\n\nمثال: Ahmad Mohammad Ali");
+        } else if (needEmail) {
+          await sendTelegramMessage(chatIdArg, "يرجى إرسال بريدك الإلكتروني.\n\nمثال: ahmad@example.com");
+        }
+      };
+
+      // ==========================================================
+      // CALLBACK QUERY — bank-choice button presses
+      // ==========================================================
+      if (update.callback_query) {
+        const cq = update.callback_query;
+        const cqChatId = cq.message?.chat?.id || cq.from.id;
+        const cqData = String(cq.data || '');
+        const cqUser = cq.from;
+        const cqTgId = String(cqUser.id).trim();
+        const cqUsername = cqUser.username ? String(cqUser.username).trim() : null;
+
+        if (cqData.startsWith('subscribe:')) {
+          const chosenBankId = cqData.split(':')[1];
+          if (!BANK_LABELS[chosenBankId]) {
+            await answerCallbackQuery(cq.id);
+            return res.status(200).send("OK");
+          }
+
+          const cqUserRow = await getOrCreateSupabaseUser(cqTgId, cqUsername);
+          if (cqUserRow?.id) {
+            await supabase.from('users').update({ pending_payment_bank_id: chosenBankId }).eq('id', cqUserRow.id);
+          }
+
+          const pricing = await getBankPricing(chosenBankId);
+          const price = pricing?.price ?? 25;
+          const payNum = pricing?.payment_number || '0798813251';
+
+          await answerCallbackQuery(cq.id);
+          await sendTelegramMessage(
+            cqChatId,
+            `💳 اشتراك ${BANK_LABELS[chosenBankId]}\n\nسعر الاشتراك: ${price} دينار\n\nطرق الدفع:\n• Zain Cash\n• CliQ\n\n📱 رقم الدفع: ${payNum}\n\nبعد إجراء الحوالة، أرسل صورة الحوالة هنا 📸\n\n⏳ سيتم مراجعة طلبك من الإدارة، وبعد الموافقة سيتم تفعيل اشتراكك في ${BANK_LABELS[chosenBankId]}.`
+          );
+        }
+        return res.status(200).send("OK");
+      }
+
       const message = update.message || update.edited_message;
       if (!message || !message.from) return res.status(200).send("OK");
 
@@ -3530,83 +5113,223 @@ function isUserAccountActive(userRow: any): boolean {
       const text = String(message.text || '').trim();
       const rawTgId = String(fromUser.id).trim();
       const tgUsername = fromUser.username ? String(fromUser.username).trim() : null;
-      const fullName = [fromUser.first_name, fromUser.last_name].filter(Boolean).join(' ').trim();
+      const telegramFullName = [fromUser.first_name, fromUser.last_name].filter(Boolean).join(' ').trim();
 
       if (!rawTgId) return res.status(200).send("OK");
 
-      const supabase = getSupabase();
-      if (!supabase) return res.status(200).send("OK (Database unavailable)");
-
-      // 1. Resolve or create user in Supabase
-      const userRow = await getOrCreateSupabaseUser(rawTgId, tgUsername, fullName);
-      const existingUser = Boolean(userRow);
-
-      // 2. Query subscription status authoritatively from Supabase
-      let isSubscribed = false;
-      let subRow: any = null;
-
-      if (userRow && userRow.id) {
-        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'moh_bank');
-        isSubscribed = subAuth.isSubscribed;
-        subRow = subAuth.subscription;
+      // ADMIN
+      const isAdminUser = verifyServerAdminAuthorization(rawTgId) || verifyServerAdminAuthorization(tgUsername);
+      if (isAdminUser) {
+        if (text.startsWith('/start')) {
+          await sendTelegramMessage(
+            chatId,
+            "👑 أهلاً بك\n\nمرحباً بك في لوحة إدارة U JO TAJNEED.\n\n🩺 U JO TAJNEED هو منصة أسئلة مخصصة للتحضير لامتحان الخدمات الطبية (طب بشري وأسنان).\n\nيمكنك الدخول إلى الموقع وإدارة المستخدمين، طلبات الدفع والاشتراكات من خلال لوحة الإدارة.",
+            siteButton()
+          );
+        }
+        return res.status(200).send("OK");
       }
 
-      const subStatusStr = isSubscribed ? 'active' : (subRow ? String(subRow.status).toLowerCase() : 'none');
+      // NORMAL USER
+      const userRow = await getOrCreateSupabaseUser(rawTgId, tgUsername, telegramFullName);
+      if (!userRow || !userRow.id) return res.status(200).send("OK");
 
-      console.log(`[BOT] telegramId=${rawTgId} existingUser=${existingUser} subscription=${subStatusStr}`);
+      const hasName = Boolean(userRow.full_name);
+      const hasEmail = Boolean(userRow.email);
+
+      const [humanMedAuth, dentAuth] = await Promise.all([
+        resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine'),
+        resolveAuthoritativeUserSubscription(userRow.id, 'dentistry')
+      ]);
+      const bankAuth: Record<string, any> = { human_medicine: humanMedAuth, dentistry: dentAuth };
+      const subscribedToAny = humanMedAuth.isSubscribed || dentAuth.isSubscribed;
 
       if (text.startsWith('/start')) {
-        const channelUrl = (serverAdminConfig as any).channelLink || 'https://t.me/+joinchat_ujoresident';
-        const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://u-jo-resident.run.app';
-        const zainCashNum = (serverAdminConfig as any).zainCashNumber || serverAdminConfig.paymentPhoneNumber || '07700000000';
-        const price = (serverAdminConfig as any).subscriptionPrice || '25,000';
+        if (subscribedToAny && (!hasName || !hasEmail)) {
+          await promptForMissingProfile(chatId, !hasName, !hasEmail);
+          return res.status(200).send("OK");
+        }
 
-        if (isSubscribed) {
-          // ACTIVE SUBSCRIBER FLOW: Recognizes subscription regardless of chat history deletion or bot restarts
-          const activeMessage =
-            `✨ <b>مرحباً بك مجدداً في تطبيق U JO Resident!</b>\n\n` +
-            `✅ <b>اشتراكك نشط ومفعل بنجاح.</b>\n` +
-            `📅 <b>تاريخ الانتهاء:</b> <code>${subRow?.expires_at ? new Date(subRow.expires_at).toLocaleDateString('en-GB') : 'مفتوح'}</code>\n\n` +
-            `يمكنك استخدام بنك الأسئلة أو الانضمام إلى القناة المخصصة للمشتركين عبر الأزرار أدناه:`;
+        const bodyLines: string[] = ["🤖 أهلاً وسهلاً بك في U JO TAJNEED", "", "🩺 منصة أسئلة للتحضير لامتحان الخدمات الطبية (طب بشري وأسنان).", ""];
+        const buttons: any[] = [];
 
-          const keyboard = {
-            inline_keyboard: [
-              [{ text: "📚 بنك الأسئلة (فتح التطبيق)", web_app: { url: appUrl } }],
-              [{ text: "📢 القناة المخصصة للمشتركين", url: channelUrl }]
-            ]
-          };
+        for (const bankId of ['human_medicine', 'dentistry']) {
+          const auth = bankAuth[bankId];
+          const label = BANK_LABELS[bankId];
+          if (auth.isSubscribed) {
+            const expiryText = auth.subscription?.expires_at
+              ? new Date(auth.subscription.expires_at).toLocaleDateString('en-GB')
+              : 'مفتوح';
+            bodyLines.push(`✅ ${label}: مفعّل (ينتهي ${expiryText})`);
+          } else {
+            const isExpired = auth.subscription && String(auth.subscription.status || '').toUpperCase() === 'EXPIRED';
+            bodyLines.push(`❌ ${label}: ${isExpired ? 'منتهي' : 'غير مفعّل'}`);
+            buttons.push([{ text: `💳 اشترك في ${label}`, callback_data: `subscribe:${bankId}` }]);
+          }
+        }
 
-          await sendTelegramMessage(chatId, activeMessage, keyboard);
-        } else if (subRow && subRow.expires_at && new Date(subRow.expires_at).getTime() <= Date.now()) {
-          // EXPIRED SUBSCRIBER FLOW
-          const expiredMessage =
-            `⚠️ <b>تنبيه: انتهت فترة اشتراكك في تطبيق U JO Resident.</b>\n\n` +
-            `لتجديد الاشتراك والاستمرار في الوصول إلى بنك الأسئلة والحلول التفصيلية، يرجى إرسال إشعار تحويل جديد عبر التطبيق.\n\n` +
-            `💳 <b>زين كاش (Zain Cash):</b> <code>${zainCashNum}</code>`;
+        if (subscribedToAny) {
+          buttons.unshift([{ text: "🩺 فتح U JO TAJNEED", web_app: { url: appUrl } }]);
+        }
 
-          const keyboard = {
-            inline_keyboard: [
-              [{ text: "🔄 تجديد الاشتراك عبر التطبيق", web_app: { url: appUrl } }]
-            ]
-          };
+        await sendTelegramMessage(chatId, bodyLines.join('\n'), { inline_keyboard: buttons });
+        return res.status(200).send("OK");
+      }
 
-          await sendTelegramMessage(chatId, expiredMessage, keyboard);
+      // PHOTO — payment proof upload
+      if (Array.isArray(message.photo) && message.photo.length > 0) {
+        const pendingBankId = userRow.pending_payment_bank_id;
+
+        if (!pendingBankId || !BANK_LABELS[pendingBankId]) {
+          await sendTelegramMessage(chatId, "يرجى أولاً اختيار البنك الذي تريد الاشتراك فيه عبر /start قبل إرسال صورة الحوالة.");
+          return res.status(200).send("OK");
+        }
+
+        if (bankAuth[pendingBankId].isSubscribed) {
+          await sendTelegramMessage(chatId, `اشتراكك في ${BANK_LABELS[pendingBankId]} مفعّل بالفعل. اكتب /start لفتح التطبيق.`, siteButton());
+          return res.status(200).send("OK");
+        }
+
+        const pricing = await getBankPricing(pendingBankId);
+        const largestPhoto = message.photo[message.photo.length - 1];
+        try {
+          const submitRes = await fetch(`http://localhost:${PORT}/api/payments/submit`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-telegram-user-id': rawTgId,
+              'x-telegram-username': tgUsername || ''
+            },
+            body: JSON.stringify({
+              telegramId: rawTgId,
+              username: tgUsername || '',
+              bankId: pendingBankId,
+              amount_syp: pricing?.price ?? 25,
+              paymentMethod: 'Zain Cash / CliQ',
+              proofFileId: largestPhoto.file_id
+            })
+          });
+
+          if (submitRes.ok) {
+            await supabase.from('users').update({ pending_payment_bank_id: null }).eq('id', userRow.id);
+            await sendTelegramMessage(
+              chatId,
+              `✅ تم استلام صورة الحوالة بنجاح لاشتراك ${BANK_LABELS[pendingBankId]}.\n\n⏳ طلبك الآن قيد المراجعة.\n\n📩 عند الموافقة على الطلب، ستصلك رسالة تلقائية هنا.`
+            );
+          } else {
+            await sendTelegramMessage(chatId, "❌ حدثت مشكلة أثناء تسجيل الحوالة.\n\nيرجى المحاولة مرة أخرى.");
+          }
+        } catch (submitErr: any) {
+          console.error('[BOT_WEBHOOK] payment submit error:', submitErr?.message || submitErr);
+          await sendTelegramMessage(chatId, "❌ حدثت مشكلة في الاتصال بالخادم.\n\nيرجى المحاولة مرة أخرى.");
+        }
+        return res.status(200).send("OK");
+      }
+
+      // TEXT (non-command)
+      if (text && !text.startsWith('/')) {
+        if (subscribedToAny && (!hasName || !hasEmail)) {
+          const needName = !hasName;
+          const needEmail = !hasEmail;
+
+          let namePart: string | null = null;
+          let emailPart: string | null = null;
+
+          if (needName && needEmail) {
+            const emailMatch = text.match(/([^\s@]+@[^\s@]+\.[^\s@]+)/);
+            if (emailMatch) {
+              emailPart = emailMatch[1];
+              namePart = (text.slice(0, emailMatch.index) + text.slice((emailMatch.index || 0) + emailMatch[1].length))
+                .trim()
+                .replace(/\s+/g, ' ') || null;
+            } else {
+              namePart = text.trim() || null;
+            }
+          } else if (needName) {
+            namePart = text;
+          } else if (needEmail) {
+            emailPart = text;
+          }
+
+          if (!namePart && !emailPart) {
+            await sendTelegramMessage(
+              chatId,
+              "⚠️ لم أتمكن من التعرف على البيانات بوضوح.\n\nيرجى إرسال الاسم الثلاثي بالإنجليزية وبريدك الإلكتروني، مثال:\n\nAhmad Mohammad Ali\nahmad@example.com"
+            );
+            return res.status(200).send("OK");
+          }
+
+          const payload: any = { telegramId: rawTgId, username: tgUsername || '' };
+          if (namePart) payload.fullName = namePart;
+          if (emailPart) payload.email = emailPart;
+
+          try {
+            const saveRes = await fetch(`http://localhost:${PORT}/api/users/profile`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-telegram-user-id': rawTgId,
+                'x-telegram-username': tgUsername || ''
+              },
+              body: JSON.stringify(payload)
+            });
+
+            if (!saveRes.ok) {
+              const errData = await saveRes.json().catch(() => ({} as any));
+              if (errData.field === 'fullName') {
+                await sendTelegramMessage(chatId, "⚠️ الاسم غير واضح. يرجى إرسال اسمك الثلاثي بالإنجليزية فقط.\n\nمثال: Ahmad Mohammad Ali");
+              } else if (errData.field === 'email') {
+                await sendTelegramMessage(chatId, "⚠️ صيغة البريد الإلكتروني غير صحيحة.\n\nمثال: ahmad@example.com\n\nيرجى إعادة إرسال البريد الإلكتروني.");
+              } else {
+                await sendTelegramMessage(chatId, "❌ حدثت مشكلة أثناء حفظ البيانات. يرجى المحاولة مرة أخرى.");
+              }
+              return res.status(200).send("OK");
+            }
+
+            const { data: refreshedUser } = await supabase
+              .from('users')
+              .select('full_name, email')
+              .eq('id', userRow.id)
+              .maybeSingle();
+
+            const stillNeedName = !refreshedUser?.full_name;
+            const stillNeedEmail = !refreshedUser?.email;
+
+            if (!stillNeedName && !stillNeedEmail) {
+              await sendTelegramMessage(
+                chatId,
+                "✅ تم حفظ بياناتك بنجاح، أنت الآن جاهز.\n\nتفضل بالدخول إلى U JO TAJNEED:",
+                siteButton()
+              );
+            } else {
+              await promptForMissingProfile(chatId, stillNeedName, stillNeedEmail);
+            }
+          } catch (saveErr: any) {
+            console.error('[BOT_WEBHOOK] profile save error:', saveErr?.message || saveErr);
+            await sendTelegramMessage(chatId, "❌ حدثت مشكلة أثناء حفظ البيانات. يرجى المحاولة مرة أخرى.");
+          }
+          return res.status(200).send("OK");
+        }
+
+        const pendingBankId = userRow.pending_payment_bank_id;
+        if (pendingBankId && BANK_LABELS[pendingBankId] && !bankAuth[pendingBankId].isSubscribed) {
+          const { data: pendingPayment } = await supabase
+            .from('payments')
+            .select('id')
+            .eq('user_id', userRow.id)
+            .eq('bank_id', pendingBankId)
+            .eq('status', 'PENDING')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (pendingPayment) {
+            await sendTelegramMessage(chatId, "⏳ طلبك قيد المراجعة حاليًا. إذا كنت مشتركاً بالفعل، اكتب /start لفتح التطبيق.");
+          } else {
+            await sendTelegramMessage(chatId, "📸 يرجى إرسال صورة الحوالة هنا، أو اكتب /start لاختيار البنك أولاً.");
+          }
         } else {
-          // NEW USER / UNPAID FLOW
-          const newSubscriberMessage =
-            `👋 <b>مرحباً بك في تطبيق U JO Resident!</b>\n\n` +
-            `تطبيق U JO Resident هو المنصة المتكاملة لأسئلة واختبارات المجلس الطبي الأردني (MOH Exam Pass).\n\n` +
-            `💳 <b>خطوات الاشتراك عبر زين كاش (Zain Cash):</b>\n` +
-            `1. قم بتحويل رسوم الاشتراك (<b>${price} د.ع</b>) إلى المحفظة: <code>${zainCashNum}</code>\n` +
-            `2. افتح التطبيق عبر الزر أدناه وأرفق صورة إشعار التحويل لتفعيل حسابك مباشرة.`;
-
-          const keyboard = {
-            inline_keyboard: [
-              [{ text: "🚀 فتح التطبيق وتقديم طلب الاشتراك", web_app: { url: appUrl } }]
-            ]
-          };
-
-          await sendTelegramMessage(chatId, newSubscriberMessage, keyboard);
+          await sendTelegramMessage(chatId, "⏳ اكتب /start لعرض حالة اشتراكك أو فتح التطبيق.");
         }
       }
 
@@ -3629,14 +5352,35 @@ function isUserAccountActive(userRow: any): boolean {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    // Telegram's in-app WebView caches index.html far more aggressively than a
+    // normal browser and often ignores standard revalidation (ETag/Last-Modified).
+    // Since index.html is what determines which hashed JS/CSS bundle gets loaded,
+    // a stale cached copy means the client keeps running old code indefinitely
+    // even after a successful deploy. The hashed asset files themselves (e.g.
+    // index-XXXXXXXX.js) are safe to cache long-term since their filename changes
+    // on every build, so only index.html needs the aggressive no-cache treatment.
+    app.use(express.static(distPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`U JO Resident App listening on http://0.0.0.0:${PORT}`);
+    console.log(`U JO TAJNEED App listening on http://0.0.0.0:${PORT}`);
   });
 }
 
