@@ -288,8 +288,8 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
                 onChange={(e) => setSelectedBank(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500"
               >
-                <option value="human_medicine">الطب البشري — Human Medicine</option>
-                <option value="dentistry">طب الأسنان — Dentistry</option>
+                <option value="human_medicine">Human Medicine</option>
+                <option value="dentistry">Dentistry</option>
               </select>
               <p className="text-[11px] text-slate-500">
                 Determines the destination bank collection for this batch.
@@ -334,7 +334,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
             <div>
               <span className="text-slate-400">Target Configuration: </span>
               <strong className="text-cyan-400">
-                {selectedBank === 'dentistry' ? 'طب الأسنان' : 'الطب البشري'} ({selectedYear} Exam Batch)
+                {selectedBank === 'dentistry' ? 'Dentistry' : 'Human Medicine'} ({selectedYear} Exam Batch)
               </strong>
             </div>
             <button
