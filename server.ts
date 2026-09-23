@@ -433,6 +433,19 @@ async function startServer() {
   // number missing the +962 prefix is now rejected outright so the bot can
   // ask the user to resend it in the correct format, rather than guessing
   // and potentially storing an incorrectly-normalized value.
+  // Validates a Jordanian mobile number in the local "07XXXXXXXX" format
+  // (10 digits total, starting with 07) — per explicit product
+  // requirement, NOT the +962 international format.
+  function validatePhoneNumber(raw: string): { valid: boolean; value?: string; reason?: string } {
+    const trimmed = (raw || '').trim().replace(/[\s\-]/g, '');
+
+    if (!/^07\d{8}$/.test(trimmed)) {
+      return { valid: false, reason: 'رقم الهاتف غير صحيح. يرجى إرسال رقم أردني صحيح يبدأ بـ 07 ومكوّن من 10 أرقام، مثال: 0798813251' };
+    }
+
+    return { valid: true, value: trimmed };
+  }
+
   function validateEmail(raw: string): { valid: boolean; value?: string; reason?: string } {
     const trimmed = (raw || '').trim().toLowerCase();
 
@@ -455,14 +468,15 @@ async function startServer() {
   // Supports PARTIAL updates — either field may be omitted (undefined) so
   // the bot can save "just the name" or "just the email" when they arrive
   // as separate messages, without requiring both at once.
-  async function saveUserProfile(userDbId: string, fullName?: string, email?: string): Promise<{ ok: boolean; persisted: boolean; error?: string }> {
+  async function saveUserProfile(userDbId: string, fullName?: string, email?: string, phoneNumber?: string): Promise<{ ok: boolean; persisted: boolean; error?: string }> {
     const supabase = getSupabase();
     if (!supabase || !userDbId) return { ok: false, persisted: false, error: 'Supabase not configured.' };
-    if (!fullName && !email) return { ok: false, persisted: false, error: 'Nothing to save.' };
+    if (!fullName && !email && !phoneNumber) return { ok: false, persisted: false, error: 'Nothing to save.' };
 
     const fullPayload: Record<string, any> = { updated_at: new Date().toISOString() };
     if (fullName !== undefined) fullPayload.full_name = fullName;
     if (email !== undefined) fullPayload.email = email;
+    if (phoneNumber !== undefined) fullPayload.phone_number = phoneNumber;
 
     const { error } = await supabase
       .from('users')
@@ -472,7 +486,10 @@ async function startServer() {
     if (!error) return { ok: true, persisted: true };
 
     if (error.code === '42703') {
-      console.warn('[PROFILE_SAVE] users.email column not found — saving full_name only until the migration is applied.');
+      // One of the newer columns (email or phone_number) doesn't exist yet
+      // in this database — retry with only the columns that are known to
+      // exist, so the admin isn't blocked while a migration is pending.
+      console.warn('[PROFILE_SAVE] A profile column was not found — retrying with a reduced payload until the migration is applied.');
       const reducedPayload: Record<string, any> = { updated_at: new Date().toISOString() };
       if (fullName !== undefined) reducedPayload.full_name = fullName;
       const retry = await supabase
@@ -699,13 +716,14 @@ async function startServer() {
         return res.status(401).json({ error: "Authentication required: Telegram user identity headers missing." });
       }
 
-      const { fullName, email } = req.body || {};
-      if (!fullName && !email) {
-        return res.status(400).json({ error: "At least one of fullName or email is required." });
+      const { fullName, email, phoneNumber } = req.body || {};
+      if (!fullName && !email && !phoneNumber) {
+        return res.status(400).json({ error: "At least one of fullName, email, or phoneNumber is required." });
       }
 
       let validatedName: string | undefined;
       let validatedEmail: string | undefined;
+      let validatedPhone: string | undefined;
 
       if (fullName !== undefined) {
         const nameCheck = validateFullName(String(fullName));
@@ -723,12 +741,20 @@ async function startServer() {
         validatedEmail = emailCheck.value;
       }
 
+      if (phoneNumber !== undefined) {
+        const phoneCheck = validatePhoneNumber(String(phoneNumber));
+        if (!phoneCheck.valid) {
+          return res.status(400).json({ error: phoneCheck.reason, field: 'phoneNumber' });
+        }
+        validatedPhone = phoneCheck.value;
+      }
+
       const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
       if (!userRow || !userRow.id) {
         return res.status(500).json({ error: "Failed to resolve user account." });
       }
 
-      const saveResult = await saveUserProfile(userRow.id, validatedName, validatedEmail);
+      const saveResult = await saveUserProfile(userRow.id, validatedName, validatedEmail, validatedPhone);
       if (!saveResult.ok) {
         return res.status(500).json({ error: saveResult.error || "Failed to save profile." });
       }
@@ -4140,6 +4166,40 @@ function isUserAccountActive(userRow: any): boolean {
     }
   }
 
+  // Sends a photo already known to Telegram (by file_id) to a given chat,
+  // with an optional HTML-formatted caption and inline keyboard — used to
+  // forward a user's payment proof photo to the admin's own chat together
+  // with Approve/Reject buttons, so the proof is visible without opening
+  // the web dashboard.
+  async function sendTelegramPhoto(chatId: string | number, photoFileId: string, caption?: string, replyMarkup?: any): Promise<boolean> {
+    const token = getTelegramBotToken();
+    if (!token || !chatId || !photoFileId) return false;
+    try {
+      const bodyPayload: any = {
+        chat_id: chatId,
+        photo: photoFileId,
+        parse_mode: 'HTML'
+      };
+      if (caption) bodyPayload.caption = caption;
+      if (replyMarkup) bodyPayload.reply_markup = replyMarkup;
+
+      const response = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload)
+      });
+      const data = await response.json();
+      if (!data.ok) {
+        console.error('[Telegram Bot] sendPhoto API error:', data);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error(`[Telegram Bot] Error sending photo to chatId: ${chatId}`, err);
+      return false;
+    }
+  }
+
   // Acknowledges a button press (removes the loading spinner Telegram
   // shows on the button until this is called). Needed for the bank-choice
   // inline buttons in the webhook handler below.
@@ -4480,22 +4540,40 @@ function isUserAccountActive(userRow: any): boolean {
         if (adminIds.length > 0) {
           const userDisplayName = userRow.full_name || (userRow.telegram_username ? `@${userRow.telegram_username}` : `User ${userRow.telegram_id}`);
           const telegramUsernameStr = requesterUsername ? `@${requesterUsername.replace(/^@/, '')}` : (userRow.telegram_username ? `@${userRow.telegram_username}` : 'N/A');
-          
+          const specialtyLabel = bankId === 'dentistry' ? 'طب الأسنان' : 'الطب البشري';
+
           const notificationMessage = `🔔 <b>طلب دفع جديد (Payment Request)</b>\n\n` +
             `👤 <b>المستخدم:</b> ${userDisplayName}\n` +
             `🏷 <b>اسم المستخدم:</b> ${telegramUsernameStr}\n` +
             `🆔 <b>Telegram ID:</b> <code>${requesterId || userRow.telegram_id}</code>\n` +
-            `💰 <b>المبلغ:</b> ${amount.toLocaleString()} L.S\n` +
+            `🩺 <b>التخصص:</b> ${specialtyLabel}\n` +
+            `💰 <b>المبلغ:</b> ${amount} JOD\n` +
             `💳 <b>طريقة الدفع:</b> ${paymentMethod}\n` +
             `📄 <b>رقم العملية/المرجع:</b> ${transactionRef || 'غير محدد'}\n` +
             `🆔 <b>معرف الطلب:</b> <code>${mappedPayment.id}</code>\n` +
-            `📅 <b>التاريخ:</b> ${new Date().toLocaleString('ar-SA')}\n\n` +
-            `<i>يرجى مراجعة الطلب من لوحة تحكم الأدمن (Admin Dashboard).</i>`;
+            `📅 <b>التاريخ:</b> ${new Date().toLocaleString('ar-SA')}`;
+
+          const approvalKeyboard = {
+            inline_keyboard: [[
+              { text: '✅ Approve', callback_data: `approve_payment:${mappedPayment.id}` },
+              { text: '❌ Reject', callback_data: `reject_payment:${mappedPayment.id}` }
+            ]]
+          };
 
           let sentCount = 0;
           for (const adminId of adminIds) {
             if (/^\d+$/.test(adminId)) {
-              const success = await sendTelegramMessage(adminId, notificationMessage);
+              // Send the actual proof photo with the details as its
+              // caption and Approve/Reject buttons attached directly —
+              // falls back to a plain text message if the photo send
+              // fails (e.g. a non-photo/text-only proof).
+              let success = false;
+              if (finalProofFileId && finalProofFileId !== 'telegram_photo_receipt') {
+                success = await sendTelegramPhoto(adminId, finalProofFileId, notificationMessage, approvalKeyboard);
+              }
+              if (!success) {
+                success = await sendTelegramMessage(adminId, notificationMessage, approvalKeyboard);
+              }
               if (success) sentCount++;
             }
           }
@@ -4893,27 +4971,25 @@ function isUserAccountActive(userRow: any): boolean {
           );
 
           const hasName = Boolean(payerUser.full_name);
+          const hasPhone = Boolean(payerUser.phone_number);
           const hasEmail = Boolean(payerUser.email);
 
-          if (hasName && hasEmail) {
+          if (hasName && hasPhone && hasEmail) {
             const replyMarkup = {
               inline_keyboard: [
                 [{ text: "🩺 فتح U JO TAJNEED", web_app: { url: appUrl } }]
               ]
             };
             await sendTelegramMessage(telegramChatId, "بياناتك مكتملة بالفعل — تفضل بالدخول إلى U JO TAJNEED:", replyMarkup);
-          } else if (!hasName && !hasEmail) {
-            await sendTelegramMessage(
-              telegramChatId,
-              "لإكمال بيانات حسابك، يرجى إرسال:\n1. الاسم الثلاثي باللغة الإنجليزية\n2. بريدك الإلكتروني\n\nمثال:\nAhmad Mohammad Ali\nahmad@example.com"
-            );
           } else if (!hasName) {
             await sendTelegramMessage(telegramChatId, "يرجى إرسال اسمك الثلاثي باللغة الإنجليزية.\n\nمثال: Ahmad Mohammad Ali");
+          } else if (!hasPhone) {
+            await sendTelegramMessage(telegramChatId, "يرجى إرسال رقم هاتفك الأردني.\n\nمثال: 0798813251");
           } else {
             await sendTelegramMessage(telegramChatId, "يرجى إرسال بريدك الإلكتروني.\n\nمثال: ahmad@example.com");
           }
 
-          console.log(`[SUB_APPROVE] Telegram confirmation sent to chatId=${telegramChatId}, profileComplete=${hasName && hasEmail}`);
+          console.log(`[SUB_APPROVE] Telegram confirmation sent to chatId=${telegramChatId}, profileComplete=${hasName && hasPhone && hasEmail}`);
         } else {
           console.warn(`[SUB_APPROVE] paymentId=${existingPayment.id} approved, but telegramChatId could not be resolved for notification.`);
         }
@@ -5057,13 +5133,14 @@ function isUserAccountActive(userRow: any): boolean {
         inline_keyboard: [[{ text: "🩺 فتح U JO TAJNEED", web_app: { url: appUrl } }]]
       });
 
-      const promptForMissingProfile = async (chatIdArg: string | number, needName: boolean, needEmail: boolean) => {
-        if (needName && needEmail) {
-          await sendTelegramMessage(chatIdArg,
-            "لإكمال بيانات حسابك، يرجى إرسال:\n1. الاسم الثلاثي باللغة الإنجليزية\n2. بريدك الإلكتروني\n\nمثال:\nAhmad Mohammad Ali\nahmad@example.com"
-          );
-        } else if (needName) {
+      const promptForMissingProfile = async (chatIdArg: string | number, needName: boolean, needPhone: boolean, needEmail: boolean) => {
+        // Sequential, one field at a time — Name, then Phone, then Email —
+        // per the required flow order (Payment Approved → Phone → Email →
+        // Platform Access), extended to keep the existing Name step first.
+        if (needName) {
           await sendTelegramMessage(chatIdArg, "يرجى إرسال اسمك الثلاثي باللغة الإنجليزية.\n\nمثال: Ahmad Mohammad Ali");
+        } else if (needPhone) {
+          await sendTelegramMessage(chatIdArg, "يرجى إرسال رقم هاتفك الأردني.\n\nمثال: 0798813251");
         } else if (needEmail) {
           await sendTelegramMessage(chatIdArg, "يرجى إرسال بريدك الإلكتروني.\n\nمثال: ahmad@example.com");
         }
@@ -5101,7 +5178,68 @@ function isUserAccountActive(userRow: any): boolean {
             cqChatId,
             `💳 اشتراك ${BANK_LABELS[chosenBankId]}\n\nسعر الاشتراك: ${price} دينار\n\nطرق الدفع:\n• Zain Cash\n• CliQ\n\n📱 رقم الدفع: ${payNum}\n\nبعد إجراء الحوالة، أرسل صورة الحوالة هنا 📸\n\n⏳ سيتم مراجعة طلبك من الإدارة، وبعد الموافقة سيتم تفعيل اشتراكك في ${BANK_LABELS[chosenBankId]}.`
           );
+          return res.status(200).send("OK");
         }
+
+        // ------------------------------------------------------
+        // ADMIN APPROVE / REJECT — pressed directly on the payment
+        // notification sent to the admin's own Telegram chat. Only a
+        // verified admin identity may trigger these, and they reuse the
+        // EXACT SAME endpoints the web admin dashboard already uses (via
+        // an internal localhost call), so behavior never diverges between
+        // the two approval paths.
+        // ------------------------------------------------------
+        if (cqData.startsWith('approve_payment:') || cqData.startsWith('reject_payment:')) {
+          const isApproverAdmin = verifyServerAdminAuthorization(cqTgId) || verifyServerAdminAuthorization(cqUsername);
+          if (!isApproverAdmin) {
+            await answerCallbackQuery(cq.id, 'غير مصرح لك بهذا الإجراء.');
+            return res.status(200).send("OK");
+          }
+
+          const isApprove = cqData.startsWith('approve_payment:');
+          const paymentId = cqData.split(':')[1];
+
+          try {
+            const actionRes = await fetch(
+              `http://localhost:${PORT}/api/admin/payments/${paymentId}/${isApprove ? 'approve' : 'reject'}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-telegram-user-id': cqTgId,
+                  'x-telegram-username': cqUsername || ''
+                }
+              }
+            );
+
+            if (actionRes.ok) {
+              await answerCallbackQuery(cq.id, isApprove ? 'تمت الموافقة ✅' : 'تم الرفض ❌');
+              // Edit the original notification so the admin sees the
+              // outcome and can't double-press the same buttons.
+              const token = getTelegramBotToken();
+              if (token && cq.message?.message_id) {
+                await fetch(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: cqChatId,
+                    message_id: cq.message.message_id,
+                    reply_markup: { inline_keyboard: [[{ text: isApprove ? '✅ تمت الموافقة' : '❌ تم الرفض', callback_data: 'noop' }]] }
+                  })
+                });
+              }
+            } else {
+              const errBody = await actionRes.json().catch(() => ({} as any));
+              await answerCallbackQuery(cq.id, `فشل: ${errBody.error || 'خطأ غير معروف'}`);
+            }
+          } catch (actionErr: any) {
+            console.error('[BOT_WEBHOOK] admin approve/reject error:', actionErr?.message || actionErr);
+            await answerCallbackQuery(cq.id, 'حدث خطأ أثناء تنفيذ الإجراء.');
+          }
+          return res.status(200).send("OK");
+        }
+
+        await answerCallbackQuery(cq.id);
         return res.status(200).send("OK");
       }
 
@@ -5135,6 +5273,7 @@ function isUserAccountActive(userRow: any): boolean {
       if (!userRow || !userRow.id) return res.status(200).send("OK");
 
       const hasName = Boolean(userRow.full_name);
+      const hasPhone = Boolean(userRow.phone_number);
       const hasEmail = Boolean(userRow.email);
 
       const [humanMedAuth, dentAuth] = await Promise.all([
@@ -5145,8 +5284,8 @@ function isUserAccountActive(userRow: any): boolean {
       const subscribedToAny = humanMedAuth.isSubscribed || dentAuth.isSubscribed;
 
       if (text.startsWith('/start')) {
-        if (subscribedToAny && (!hasName || !hasEmail)) {
-          await promptForMissingProfile(chatId, !hasName, !hasEmail);
+        if (subscribedToAny && (!hasName || !hasPhone || !hasEmail)) {
+          await promptForMissingProfile(chatId, !hasName, !hasPhone, !hasEmail);
           return res.status(200).send("OK");
         }
 
@@ -5226,42 +5365,24 @@ function isUserAccountActive(userRow: any): boolean {
         return res.status(200).send("OK");
       }
 
-      // TEXT (non-command)
+      // TEXT (non-command) — sequential profile collection: Name, then
+      // Phone (Jordanian 07XXXXXXXX), then Email — one field per message,
+      // per the required post-approval flow order.
       if (text && !text.startsWith('/')) {
-        if (subscribedToAny && (!hasName || !hasEmail)) {
-          const needName = !hasName;
-          const needEmail = !hasEmail;
-
-          let namePart: string | null = null;
-          let emailPart: string | null = null;
-
-          if (needName && needEmail) {
-            const emailMatch = text.match(/([^\s@]+@[^\s@]+\.[^\s@]+)/);
-            if (emailMatch) {
-              emailPart = emailMatch[1];
-              namePart = (text.slice(0, emailMatch.index) + text.slice((emailMatch.index || 0) + emailMatch[1].length))
-                .trim()
-                .replace(/\s+/g, ' ') || null;
-            } else {
-              namePart = text.trim() || null;
-            }
-          } else if (needName) {
-            namePart = text;
-          } else if (needEmail) {
-            emailPart = text;
-          }
-
-          if (!namePart && !emailPart) {
-            await sendTelegramMessage(
-              chatId,
-              "⚠️ لم أتمكن من التعرف على البيانات بوضوح.\n\nيرجى إرسال الاسم الثلاثي بالإنجليزية وبريدك الإلكتروني، مثال:\n\nAhmad Mohammad Ali\nahmad@example.com"
-            );
-            return res.status(200).send("OK");
-          }
-
+        if (subscribedToAny && (!hasName || !hasPhone || !hasEmail)) {
           const payload: any = { telegramId: rawTgId, username: tgUsername || '' };
-          if (namePart) payload.fullName = namePart;
-          if (emailPart) payload.email = emailPart;
+          let expectedField: 'fullName' | 'phoneNumber' | 'email';
+
+          if (!hasName) {
+            payload.fullName = text;
+            expectedField = 'fullName';
+          } else if (!hasPhone) {
+            payload.phoneNumber = text;
+            expectedField = 'phoneNumber';
+          } else {
+            payload.email = text;
+            expectedField = 'email';
+          }
 
           try {
             const saveRes = await fetch(`http://localhost:${PORT}/api/users/profile`, {
@@ -5278,6 +5399,8 @@ function isUserAccountActive(userRow: any): boolean {
               const errData = await saveRes.json().catch(() => ({} as any));
               if (errData.field === 'fullName') {
                 await sendTelegramMessage(chatId, "⚠️ الاسم غير واضح. يرجى إرسال اسمك الثلاثي بالإنجليزية فقط.\n\nمثال: Ahmad Mohammad Ali");
+              } else if (errData.field === 'phoneNumber') {
+                await sendTelegramMessage(chatId, errData.error || "⚠️ رقم الهاتف غير صحيح. يرجى إرسال رقم أردني صحيح يبدأ بـ 07، مثال: 0798813251");
               } else if (errData.field === 'email') {
                 await sendTelegramMessage(chatId, "⚠️ صيغة البريد الإلكتروني غير صحيحة.\n\nمثال: ahmad@example.com\n\nيرجى إعادة إرسال البريد الإلكتروني.");
               } else {
@@ -5288,21 +5411,22 @@ function isUserAccountActive(userRow: any): boolean {
 
             const { data: refreshedUser } = await supabase
               .from('users')
-              .select('full_name, email')
+              .select('full_name, phone_number, email')
               .eq('id', userRow.id)
               .maybeSingle();
 
             const stillNeedName = !refreshedUser?.full_name;
+            const stillNeedPhone = !refreshedUser?.phone_number;
             const stillNeedEmail = !refreshedUser?.email;
 
-            if (!stillNeedName && !stillNeedEmail) {
+            if (!stillNeedName && !stillNeedPhone && !stillNeedEmail) {
               await sendTelegramMessage(
                 chatId,
                 "✅ تم حفظ بياناتك بنجاح، أنت الآن جاهز.\n\nتفضل بالدخول إلى U JO TAJNEED:",
                 siteButton()
               );
             } else {
-              await promptForMissingProfile(chatId, stillNeedName, stillNeedEmail);
+              await promptForMissingProfile(chatId, stillNeedName, stillNeedPhone, stillNeedEmail);
             }
           } catch (saveErr: any) {
             console.error('[BOT_WEBHOOK] profile save error:', saveErr?.message || saveErr);
@@ -5310,6 +5434,7 @@ function isUserAccountActive(userRow: any): boolean {
           }
           return res.status(200).send("OK");
         }
+
 
         const pendingBankId = userRow.pending_payment_bank_id;
         if (pendingBankId && BANK_LABELS[pendingBankId] && !bankAuth[pendingBankId].isSubscribed) {
