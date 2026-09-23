@@ -34,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
               </span>
             </div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-              منصة الخدمات الطبية
+              Medical Services Platform
             </p>
           </div>
         </button>
@@ -85,9 +85,9 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
           <div className="flex items-center gap-3">
             <div className="text-right hidden md:block">
               <p className="text-xs font-bold text-slate-200">
-                {user.firstName ? `${user.firstName} ${user.lastName}` : 'المستخدم'}
+                {user.firstName ? `${user.firstName} ${user.lastName}` : 'User'}
               </p>
-              <p className="text-[10px] text-slate-500">متدرب</p>
+              <p className="text-[10px] text-slate-500">Trainee</p>
             </div>
             <div className="w-9 h-9 rounded-full border-2 border-slate-700 bg-slate-800 flex items-center justify-center overflow-hidden">
               <User className="w-4 h-4 text-slate-300" />
