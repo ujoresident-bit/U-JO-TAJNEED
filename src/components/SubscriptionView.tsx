@@ -25,8 +25,8 @@ interface SubscriptionViewProps {
 }
 
 const BANK_NAMES: Record<string, string> = {
-  human_medicine: 'الطب البشري',
-  dentistry: 'طب الأسنان'
+  human_medicine: 'Human Medicine',
+  dentistry: 'Dentistry'
 };
 
 export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, onRefreshData, bankId = 'human_medicine' }) => {
@@ -62,10 +62,10 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
             <span>{bankLabel} — U JO TAJNEED Pass</span>
           </div>
           <h1 className="text-2xl font-bold text-slate-100">
-            حالة اشتراك: {bankLabel}
+            Subscription Status: {bankLabel}
           </h1>
           <p className="text-xs text-slate-400 max-w-xl">
-            هذا الاشتراك مستقل تماماً عن اشتراكات البنوك الأخرى — يفتح الوصول لبنك {bankLabel} فقط.
+            This subscription is fully independent from other banks — it only unlocks access to {bankLabel}.
           </p>
         </div>
       </div>
@@ -74,7 +74,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
       <div className="rounded-2xl bg-slate-900/90 border border-slate-800 p-6 shadow-lg space-y-4">
         <div className="flex items-center justify-between pb-4 border-b border-slate-800">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            حالة الاشتراك الحالية
+            Current Subscription Status
           </span>
           <span
             className={`px-3 py-1 rounded text-xs font-extrabold uppercase border ${
@@ -91,7 +91,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div>
-            <span className="text-slate-400">البنك:</span>{' '}
+            <span className="text-slate-400">Bank:</span>{' '}
             <strong className="text-slate-200">{bankLabel}</strong>
           </div>
           <div>
@@ -100,7 +100,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
           </div>
           {subscription.startDate && (
             <div>
-              <span className="text-slate-400">تاريخ البدء:</span>{' '}
+              <span className="text-slate-400">Start Date:</span>{' '}
               <span className="text-slate-300">
                 {new Date(subscription.startDate).toLocaleDateString()}
               </span>
@@ -108,7 +108,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
           )}
           {subscription.expiryDate && (
             <div>
-              <span className="text-slate-400">تاريخ الانتهاء:</span>{' '}
+              <span className="text-slate-400">Expiry Date:</span>{' '}
               <span className="text-slate-300">
                 {new Date(subscription.expiryDate).toLocaleDateString()}
               </span>
@@ -120,17 +120,17 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
           <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-center gap-3 text-xs">
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
             <div>
-              <p className="font-bold">الوصول مفتوح بالكامل</p>
-              <p className="text-emerald-400/80">لديك وصول كامل لكل أسئلة {bankLabel} وأدوات الشرح بالذكاء الاصطناعي.</p>
+              <p className="font-bold">Full Access Unlocked</p>
+              <p className="text-emerald-400/80">You have full access to all {bankLabel} questions and AI explanation tools.</p>
             </div>
           </div>
         ) : (
           <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center gap-3 text-xs">
             <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
             <div>
-              <p className="font-bold">الاشتراك مطلوب</p>
+              <p className="font-bold">Subscription Required</p>
               <p className="text-rose-400/80">
-                اشتراكك بـ{bankLabel} غير مفعّل حالياً. للاشتراك، افتح البوت على تلغرام واكتب /start، ثم اختر "{bankLabel}".
+                Your {bankLabel} subscription is not active. To subscribe, open the Telegram bot and send /start, then choose "{bankLabel}".
               </p>
             </div>
           </div>
@@ -144,7 +144,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
           className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-cyan-500/20 disabled:opacity-50"
         >
           <RotateCcw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-          <span>تحديث حالة الاشتراك</span>
+          <span>Refresh Subscription Status</span>
         </button>
 
         <button
@@ -152,7 +152,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
           className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all flex items-center gap-1.5 border border-slate-700"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>العودة للرئيسية</span>
+          <span>Back to Home</span>
         </button>
       </div>
     </div>
