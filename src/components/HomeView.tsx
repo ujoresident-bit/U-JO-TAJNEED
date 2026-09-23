@@ -23,8 +23,8 @@ interface HomeViewProps {
 }
 
 const BANKS = [
-  { id: 'human_medicine', name: 'الطب البشري', shortName: 'Human Medicine', color: 'cyan' as const },
-  { id: 'dentistry', name: 'طب الأسنان', shortName: 'Dentistry', color: 'amber' as const }
+  { id: 'human_medicine', name: 'Human Medicine', shortName: 'Human Medicine', color: 'cyan' as const },
+  { id: 'dentistry', name: 'Dentistry', shortName: 'Dentistry', color: 'amber' as const }
 ];
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
@@ -77,10 +77,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           <span>U JO TAJNEED</span>
         </div>
         <h1 className="text-2xl sm:text-3xl font-light text-slate-100">
-          منصة التحضير لامتحان <span className="font-bold neon-text">الخدمات الطبية</span>
+          Medical Services Exam <span className="font-bold neon-text">Prep Platform</span>
         </h1>
         <p className="text-xs text-slate-400 max-w-xl">
-          اختر البنك الذي تريد التدرب عليه — كل بنك اشتراك مستقل تماماً عن الآخر.
+          Choose the bank you want to practice — each bank has a fully independent subscription.
         </p>
       </div>
 
@@ -116,19 +116,19 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
               {!isActive && !session.isAdmin && (
                 <p className="text-xs text-slate-400">
                   {sub.status === 'PENDING'
-                    ? 'طلب الدفع قيد المراجعة من الإدارة.'
+                    ? 'Your payment request is under admin review.'
                     : sub.status === 'EXPIRED'
-                    ? 'انتهى اشتراكك — جدّده للاستمرار بالتدرب.'
-                    : 'اشترك بهذا البنك للوصول إلى بنك الأسئلة الكامل.'}
+                    ? 'Your subscription has expired — renew to continue practicing.'
+                    : 'Subscribe to this bank to access the full question bank.'}
                 </p>
               )}
 
               {(isActive || session.isAdmin) && activeBlock && (
                 <div className="p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] uppercase text-slate-500 font-bold tracking-wider">جلسة نشطة</p>
+                    <p className="text-[10px] uppercase text-slate-500 font-bold tracking-wider">Active Session</p>
                     <p className="text-xs font-semibold text-slate-200">
-                      سؤال {activeBlock.currentIndex + 1} من {activeBlock.questionIds.length}
+                      Question {activeBlock.currentIndex + 1} of {activeBlock.questionIds.length}
                     </p>
                   </div>
                   <button
@@ -136,7 +136,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                     className={`px-4 py-2 rounded-lg ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} text-slate-950 text-[11px] font-black uppercase flex items-center gap-1.5`}
                   >
                     <Play className="w-3 h-3 fill-slate-950" />
-                    <span>متابعة</span>
+                    <span>Continue</span>
                   </button>
                 </div>
               )}
@@ -158,7 +158,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                       className={`flex-1 py-3 rounded-xl ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} text-slate-950 font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95`}
                     >
                       <BookOpen className="w-4 h-4" />
-                      <span>بدء اختبار جديد</span>
+                      <span>Start New Test</span>
                     </button>
                   </>
                 ) : (
@@ -167,14 +167,14 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                     className="flex-1 py-3 rounded-xl glass-panel hover:bg-white/10 border border-white/10 text-slate-200 font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
                   >
                     <CreditCard className="w-4 h-4" />
-                    <span>{sub.status === 'EXPIRED' ? 'تجديد الاشتراك' : 'اشترك الآن'}</span>
+                    <span>{sub.status === 'EXPIRED' ? 'Renew Subscription' : 'Subscribe Now'}</span>
                   </button>
                 )}
               </div>
 
               {isActive && (
                 <p className="text-[10px] text-slate-500 text-center">
-                  ينتهي الاشتراك خلال {getDaysRemaining(bank.id)} يوم
+                  Subscription expires in {getDaysRemaining(bank.id)} days
                 </p>
               )}
             </div>
@@ -216,7 +216,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
             <CreditCard className="w-7 h-7" />
           </div>
           <p className="text-xs font-bold uppercase tracking-widest text-slate-200 group-hover:text-amber-300 transition-colors">
-            الاشتراكات
+            Subscriptions
           </p>
         </div>
 
