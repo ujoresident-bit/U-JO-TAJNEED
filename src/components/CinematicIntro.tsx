@@ -60,7 +60,7 @@ export const CinematicIntro: React.FC<CinematicIntroProps> = ({ onComplete }) =>
             <span className="text-slate-100">TAJNEED</span>
           </h1>
           <p className="text-[11px] sm:text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
-            منصة التحضير لامتحان الخدمات الطبية
+            Medical Services Exam Prep Platform
           </p>
         </div>
       </div>
