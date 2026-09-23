@@ -49,7 +49,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
       if (!isFormOrAllowedElement(e.target)) {
         e.preventDefault();
         e.stopPropagation();
-        triggerToast('نسخ المحتوى غير مسموح به.');
+        triggerToast('Copying content is not allowed.');
       }
     };
 
@@ -58,7 +58,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
       if (!isFormOrAllowedElement(e.target)) {
         e.preventDefault();
         e.stopPropagation();
-        triggerToast('نسخ المحتوى غير مسموح به.');
+        triggerToast('Copying content is not allowed.');
       }
     };
 
@@ -75,7 +75,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
       ) {
         e.preventDefault();
         e.stopPropagation();
-        triggerToast('هذا الاختصار غير متاح لمحتوى المنصة المحمي.');
+        triggerToast('This shortcut is not available for protected platform content.');
         return;
       }
 
@@ -84,7 +84,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
         if (!isFormOrAllowedElement(e.target)) {
           e.preventDefault();
           e.stopPropagation();
-          triggerToast('نسخ المحتوى غير مسموح به.');
+          triggerToast('Copying content is not allowed.');
         }
       }
     };
@@ -133,7 +133,7 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
         <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-xl z-[9999] flex items-center justify-center text-slate-300 font-bold p-6 text-center select-none" dir="rtl">
           <div className="space-y-2">
             <div className="text-2xl">🩺 U JO TAJNEED</div>
-            <p className="text-sm text-slate-400">المحتوى محمي لمستخدم المنصة. يرجى العودة للتبويب لعرض المحتوى.</p>
+            <p className="text-sm text-slate-400">Content is protected for platform users. Please return to the tab to view content.</p>
           </div>
         </div>
       )}
