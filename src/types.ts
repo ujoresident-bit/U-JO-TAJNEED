@@ -1,10 +1,16 @@
-export type OptionKey = 'A' | 'B' | 'C' | 'D';
+export type OptionKey = 'A' | 'B' | 'C' | 'D' | 'E';
 
 export interface QuestionOptions {
   A: string;
   B: string;
-  C: string;
-  D: string;
+  // C, D, and E are now optional — some valid exam questions (True/False,
+  // 3-option questions) legitimately have fewer than 4 choices. Every
+  // screen (exam, explanation, admin edit) already renders only the
+  // options actually present on a given question via `.filter(Boolean(...))`,
+  // never a hardcoded expectation of exactly 4.
+  C?: string;
+  D?: string;
+  E?: string;
 }
 
 export interface OptionExplanations {
@@ -12,6 +18,7 @@ export interface OptionExplanations {
   B?: string;
   C?: string;
   D?: string;
+  E?: string;
 }
 
 export interface EvidenceSource {
@@ -36,7 +43,7 @@ export interface Question {
   major: string;
   topic: string;
   subtopic?: string;
-  year: number;
+  year: number | string;
   difficulty: 'Easy' | 'Medium' | 'Hard';
   classificationStatus?: 'CLASSIFIED' | 'NEEDS_REVIEW';
   createdAt?: string;
@@ -46,7 +53,7 @@ export interface Question {
 export interface ImportBatch {
   id: string;
   bankId: string;
-  year: number;
+  year: number | string;
   adminId: string;
   status: 'COMPLETED' | 'CANCELLED';
   totalQuestions: number;
@@ -67,7 +74,7 @@ export interface InvalidQuestionError {
 
 export interface ImportPreviewResult {
   bankId: string;
-  year: number;
+  year: number | string;
   fileName: string;
   totalInFile: number;
   validQuestions: Question[];
@@ -93,11 +100,12 @@ export interface BlockFilters {
   topic?: string;
   majors?: string[];
   topics?: string[];
-  years?: number[];
+  years?: (number | string)[];
   difficulty?: string;
   questionCount?: number;
   statusFilter?: QuestionStatusFilter;
   userId?: string;
+  bankId?: string;
 }
 
 export interface BlockAnswer {
@@ -245,5 +253,5 @@ export interface QuestionBankMeta {
     questionCount: number;
     topics: { name: string; questionCount: number }[];
   }[];
-  yearsAvailable: number[];
+  yearsAvailable: (number | string)[];
 }
