@@ -213,9 +213,31 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
 
   // Calculate dynamic meta counts from stored questions
   const totalQuestions = questions.length;
-  const yearsAvailable = Array.from(new Set(questions.map((q) => q.year))).sort((a, b) => a - b);
+  const yearsAvailable = Array.from(new Set(questions.map((q) => q.year))).sort((a, b) => {
+    // Numeric years sort numerically and always come before non-numeric
+    // category labels (like 'TAJNEED'/'MADANI'), which sort alphabetically
+    // among themselves.
+    const aIsNum = typeof a === 'number';
+    const bIsNum = typeof b === 'number';
+    if (aIsNum && bIsNum) return (a as number) - (b as number);
+    if (aIsNum) return -1;
+    if (bIsNum) return 1;
+    return String(a).localeCompare(String(b));
+  });
   if (yearsAvailable.length === 0) {
     yearsAvailable.push(...baseMeta.yearsAvailable);
+  }
+
+  // Always offer TAJNEED and MADANI as selectable categories for Human
+  // Medicine on the existing "Past Years" filter, using the exact same
+  // yearsAvailable mechanism — even before any questions are imported
+  // under them, so admins/students see them as ready-to-use categories.
+  if (bankId === 'human_medicine') {
+    for (const label of ['TAJNEED', 'MADANI']) {
+      if (!yearsAvailable.includes(label)) {
+        yearsAvailable.push(label);
+      }
+    }
   }
 
   // Calculate dynamic majors & sub-topics breakdown from actual stored questions
@@ -590,7 +612,7 @@ export const parseTextQuestions = (content: string): any[] => {
 
 export const previewImportBatch = (
   selectedBankId: string,
-  selectedYear: number,
+  selectedYear: number | string,
   jsonContent: string,
   fileName: string
 ): ImportPreviewResult => {
@@ -1155,7 +1177,7 @@ export const getQuestionBankStatsOverview = (bankId?: string) => {
     yearCounts[y] = 0;
   }
   questions.forEach((q) => {
-    if (q.year >= 2015 && q.year <= 2025) {
+    if (typeof q.year === 'number' && q.year >= 2015 && q.year <= 2025) {
       yearCounts[q.year] = (yearCounts[q.year] || 0) + 1;
     }
   });
