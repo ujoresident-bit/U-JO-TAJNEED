@@ -10,6 +10,9 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { FlashcardsView } from './components/FlashcardsView';
 import { ContentProtection } from './components/ContentProtection';
 import { CinematicIntro } from './components/CinematicIntro';
+import { SpecialtyHub } from './components/SpecialtyHub';
+import { MostCommonView } from './components/MostCommonView';
+import { VideosView } from './components/VideosView';
 import { initTelegramSdk } from './services/telegram';
 import { getCurrentUser, checkAccountActiveStatus } from './services/authService';
 import { syncQuestionsWithSupabase, syncBlocksFromSupabase } from './services/questionBankService';
@@ -105,6 +108,15 @@ export default function App() {
           {currentView === 'home' && <HomeView onNavigate={handleNavigate} />}
 
           {currentView === 'bank' && <QuestionBankView onNavigate={handleNavigate} bankId={viewParams.bankId} />}
+          {currentView === 'specialty_hub' && (
+            <SpecialtyHub
+              onNavigate={handleNavigate}
+              bankId={viewParams.bankId || 'human_medicine'}
+              bankLabel={viewParams.bankId === 'dentistry' ? 'Dentistry' : 'Human Medicine'}
+            />
+          )}
+          {currentView === 'most_common' && <MostCommonView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
+          {currentView === 'videos' && <VideosView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
 
           {currentView === 'question_screen' && (
             <QuestionScreen
