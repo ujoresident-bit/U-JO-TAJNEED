@@ -13,6 +13,7 @@ import { CinematicIntro } from './components/CinematicIntro';
 import { SpecialtyHub } from './components/SpecialtyHub';
 import { MostCommonView } from './components/MostCommonView';
 import { VideosView } from './components/VideosView';
+import { QBankBasicView } from './components/QBankBasicView';
 import { initTelegramSdk } from './services/telegram';
 import { getCurrentUser, checkAccountActiveStatus } from './services/authService';
 import { syncQuestionsWithSupabase, syncBlocksFromSupabase } from './services/questionBankService';
@@ -117,6 +118,7 @@ export default function App() {
           )}
           {currentView === 'most_common' && <MostCommonView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
           {currentView === 'videos' && <VideosView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
+          {currentView === 'qbank_basic' && <QBankBasicView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
 
           {currentView === 'question_screen' && (
             <QuestionScreen
