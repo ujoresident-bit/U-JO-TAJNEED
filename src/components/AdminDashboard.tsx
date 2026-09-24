@@ -18,7 +18,8 @@ import {
   AlertTriangle,
   Layers,
   Eye,
-  Trash2
+  Trash2,
+  Clapperboard
 } from 'lucide-react';
 import {
   getDashboardMetrics,
@@ -54,6 +55,7 @@ import { AdminImportWizard } from './AdminImportWizard';
 import { AdminQuestionTable } from './AdminQuestionTable';
 import { AdminQuestionStats } from './AdminQuestionStats';
 import { AdminFlashcardsManager } from './AdminFlashcardsManager';
+import { AdminVideoManager } from './AdminVideoManager';
 
 interface AdminDashboardProps {
   onNavigate: (view: string) => void;
@@ -83,7 +85,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
       </div>
     );
   }
-  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'config'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'videos' | 'config'>('overview');
   const [bankSubTab, setBankSubTab] = useState<'directory' | 'import' | 'stats'>('directory');
 
   // Metrics state (integrated with live Supabase telemetry)
@@ -327,6 +329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
           { id: 'users', label: 'User Directory', icon: Users },
           { id: 'bank', label: 'Bank Inventory', icon: BookOpen },
           { id: 'flashcards', label: 'Flashcards', icon: Layers },
+          { id: 'videos', label: 'Videos', icon: Clapperboard },
           { id: 'config', label: 'System Config', icon: Settings }
         ].map((tab) => {
           const Icon = tab.icon;
@@ -737,6 +740,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
 
       {/* Tab 5: Flashcards */}
       {activeTab === 'flashcards' && <AdminFlashcardsManager />}
+      {activeTab === 'videos' && <AdminVideoManager />}
 
       {/* Tab 6: System Configuration */}
       {activeTab === 'config' && (
