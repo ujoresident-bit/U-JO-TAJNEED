@@ -329,7 +329,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
     return counts;
   }, [availableTopics, selectedMajors, selectedYears, selectedDifficulty, selectedStatusFilter, user.telegramId]);
 
-  const toggleYear = (year: number) => {
+  const toggleYear = (year: number | string) => {
     if (selectedYears.includes(year)) {
       setSelectedYears(selectedYears.filter((y) => y !== year));
     } else {
