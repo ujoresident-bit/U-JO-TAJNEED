@@ -44,6 +44,29 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
   // Step 1: Selection
   const [selectedBank, setSelectedBank] = useState<string>('human_medicine');
   const [selectedYear, setSelectedYear] = useState<number | string>(2025);
+  // Human Medicine "Past Years" now requires choosing TAJNEED or MADANI
+  // FIRST (mandatory, no default), then manually typing the year number —
+  // the two combine into the actual stored category label (e.g. "TAJNEED
+  // 2023"), which appears as its own distinct filter chip on the
+  // student-facing Past Years page automatically.
+  const [examCategory, setExamCategory] = useState<'TAJNEED' | 'MADANI' | ''>('');
+  const [manualYearInput, setManualYearInput] = useState<string>('2025');
+
+  // Keep the actual stored value in sync: Human Medicine combines the
+  // mandatory category with the manually typed year; Dentistry (no
+  // category concept requested) just uses the manual year as a number.
+  useEffect(() => {
+    if (selectedBank === 'human_medicine') {
+      if (examCategory && manualYearInput.trim()) {
+        setSelectedYear(`${examCategory} ${manualYearInput.trim()}`);
+      }
+    } else {
+      const n = Number(manualYearInput);
+      if (manualYearInput.trim() && !isNaN(n)) {
+        setSelectedYear(n);
+      }
+    }
+  }, [selectedBank, examCategory, manualYearInput]);
 
   // Step 2: Textarea & File
   const [pastedText, setPastedText] = useState<string>('');
@@ -298,26 +321,58 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
 
             <div className="space-y-1.5">
               <label className="font-bold text-slate-200">Exam Year Batch</label>
-              <select
-                value={selectedYear}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  setSelectedYear(/^\d+$/.test(raw) ? Number(raw) : raw);
-                }}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500"
-              >
-                {Array.from({ length: 11 }, (_, i) => 2015 + i).map((yr) => (
-                  <option key={yr} value={yr}>
-                    {yr} Residency Exam
-                  </option>
-                ))}
-                {selectedBank === 'human_medicine' && (
-                  <>
-                    <option value="TAJNEED">TAJNEED</option>
-                    <option value="MADANI">MADANI</option>
-                  </>
-                )}
-              </select>
+
+              {selectedBank === 'human_medicine' ? (
+                <>
+                  {/* Mandatory category choice — no default, must pick one */}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExamCategory('TAJNEED')}
+                      className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                        examCategory === 'TAJNEED'
+                          ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-600'
+                      }`}
+                    >
+                      TAJNEED
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExamCategory('MADANI')}
+                      className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                        examCategory === 'MADANI'
+                          ? 'bg-amber-500 text-slate-950 border-amber-400'
+                          : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-600'
+                      }`}
+                    >
+                      MADANI
+                    </button>
+                  </div>
+                  {!examCategory && (
+                    <p className="text-[11px] text-rose-400">Required: choose TAJNEED or MADANI before entering the year.</p>
+                  )}
+
+                  {/* Manual year entry, only meaningful once a category is chosen */}
+                  <input
+                    type="number"
+                    value={manualYearInput}
+                    onChange={(e) => setManualYearInput(e.target.value)}
+                    disabled={!examCategory}
+                    placeholder="e.g. 2023"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500 disabled:opacity-40"
+                  />
+                </>
+              ) : (
+                <input
+                  type="number"
+                  value={manualYearInput}
+                  onChange={(e) => setManualYearInput(e.target.value)}
+                  placeholder="e.g. 2023"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500"
+                />
+              )}
+
               <p className="text-[11px] text-slate-500">
                 Applied authoritatively to every question in this uploaded file.
               </p>
@@ -327,7 +382,8 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
           <div className="flex justify-end pt-2">
             <button
               onClick={() => setStep(2)}
-              className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold flex items-center gap-2 transition-all shadow-md shadow-cyan-500/20"
+              disabled={selectedBank === 'human_medicine' && !examCategory}
+              className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold flex items-center gap-2 transition-all shadow-md shadow-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>Next: Paste Questions</span>
               <ArrowRight className="w-4 h-4" />
