@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Layers, Sparkles, Clapperboard, ChevronLeft } from 'lucide-react';
+import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, ChevronLeft } from 'lucide-react';
 
 interface SpecialtyHubProps {
   bankId: string;
@@ -23,11 +23,19 @@ export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, o
       onClick: () => onNavigate('bank', { bankId })
     },
     {
+      key: 'qbank_basic',
+      title: 'QBANK BASIC',
+      description: 'Pharmacology, Microbiology, Immunology & Anatomy — no filters needed.',
+      icon: GraduationCap,
+      accent: 'emerald',
+      onClick: () => onNavigate('qbank_basic', { bankId })
+    },
+    {
       key: 'flashcards',
       title: 'Flashcards',
       description: 'Flip through quick-recall cards at your own pace.',
       icon: Layers,
-      accent: 'emerald',
+      accent: 'cyan',
       onClick: () => onNavigate('flashcards', { bankId })
     },
     {
