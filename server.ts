@@ -975,7 +975,13 @@ async function startServer() {
           reviewNote: q.review_note || q.reviewNote || '',
           major: q.major || 'General',
           topic: q.topic || '',
-          year: Number(q.year || 2025),
+          // ROOT CAUSE FIX: previously always forced year to a number here,
+          // which would corrupt 'TAJNEED'/'MADANI' string category labels
+          // back into NaN/2025 on every fetch, even though they were
+          // stored correctly — this is the exact fetch path the whole
+          // app reads questions through.
+          year: (q.year === 'TAJNEED' || q.year === 'MADANI') ? q.year : Number(q.year || 2025),
+          isMostCommon: Boolean(q.is_most_common ?? q.isMostCommon ?? false),
           difficulty: q.difficulty || 'Medium',
           classificationStatus: q.classification_status || q.classificationStatus || 'CLASSIFIED',
           createdAt: q.created_at || q.createdAt,
@@ -1039,7 +1045,12 @@ async function startServer() {
         review_note: qObj.reviewNote || null,
         major: qObj.major ? String(qObj.major).trim() : 'General Medical Sciences',
         topic: qObj.topic ? String(qObj.topic).trim() : 'Unassigned Topic',
-        year: Number(qObj.year || 2025)
+        // ROOT CAUSE FIX: previously always forced year to a number, which
+        // would silently strip the 'TAJNEED'/'MADANI' text label off any
+        // question under those categories. Preserve string category
+        // labels; only default to numeric 2025 when year is absent.
+        year: (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025),
+        is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false)
       };
 
       const { data, error } = await supabase.from('questions').upsert([row], { onConflict: 'id' }).select();
@@ -1096,7 +1107,12 @@ async function startServer() {
         review_note: qObj.reviewNote || null,
         major: qObj.major ? String(qObj.major).trim() : 'General Medical Sciences',
         topic: qObj.topic ? String(qObj.topic).trim() : 'Unassigned Topic',
-        year: Number(qObj.year || 2025)
+        // ROOT CAUSE FIX: previously always forced year to a number, which
+        // would silently strip the 'TAJNEED'/'MADANI' text label off any
+        // question under those categories. Preserve string category
+        // labels; only default to numeric 2025 when year is absent.
+        year: (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025),
+        is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false)
       };
 
       const { data, error } = await supabase.from('questions').upsert([row], { onConflict: 'id' }).select();
@@ -1314,7 +1330,9 @@ async function startServer() {
           optExps = JSON.stringify(optExps);
         }
 
-        const year = Number(qObj.year || 2025);
+        // Preserve TAJNEED/MADANI string category labels through import —
+        // never coerce them to a number.
+        const year = (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025);
         // ROOT CAUSE FIX: bank_id was never read from the incoming question
         // object here, so every imported question — including USMLE bank
         // questions explicitly tagged with bankId on the client — silently
@@ -4671,6 +4689,164 @@ function isUserAccountActive(userRow: any): boolean {
   });
 
   // GET /api/subscriptions/status - Check if a user has an active subscription
+  // ============================================================
+  // VIDEOS — Netflix-style video library, scoped per bank. Public list
+  // endpoint requires an active subscription for that bank (same gate as
+  // questions); admin endpoints allow full CRUD management.
+  // ============================================================
+
+  // GET /api/videos?bankId=human_medicine — student-facing list, gated by
+  // an active subscription for that specific bank.
+  app.get("/api/videos", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+      const bankId = String(req.query.bankId || '').trim();
+
+      if (!bankId) {
+        return res.status(400).json({ success: false, error: "bankId is required." });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const isAdminCaller = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAdminCaller) {
+        const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+        if (!userRow?.id) return res.status(403).json({ success: false, error: "Subscription required." });
+        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, bankId);
+        if (!subAuth.isSubscribed) {
+          return res.status(403).json({ success: false, error: "An active subscription for this bank is required to view videos." });
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('videos')
+        .select('*')
+        .eq('bank_id', bankId)
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: false });
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+
+      return res.json({ success: true, videos: data || [] });
+    } catch (err: any) {
+      console.error("Error in GET /api/videos:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ---- Admin video management ----
+  const requireAdminForVideos = (req: express.Request): boolean => {
+    const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || req.body?.telegramUserId || '') as string;
+    const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || req.body?.username || '') as string;
+    return verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+  };
+
+  app.post("/api/admin/videos", async (req, res) => {
+    try {
+      if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+
+      const { bankId, title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder } = req.body || {};
+      if (!bankId || !title || !videoUrl) {
+        return res.status(400).json({ success: false, error: "bankId, title, and videoUrl are required." });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data, error } = await supabase
+        .from('videos')
+        .insert({
+          bank_id: bankId,
+          title: String(title).trim(),
+          description: description ? String(description).trim() : null,
+          thumbnail_url: thumbnailUrl || null,
+          video_url: String(videoUrl).trim(),
+          category: category || null,
+          duration_label: durationLabel || null,
+          sort_order: Number(sortOrder) || 0
+        })
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, video: data });
+    } catch (err: any) {
+      console.error("Error in POST /api/admin/videos:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put("/api/admin/videos/:id", async (req, res) => {
+    try {
+      if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+
+      const { title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder } = req.body || {};
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (title !== undefined) updatePayload.title = String(title).trim();
+      if (description !== undefined) updatePayload.description = description ? String(description).trim() : null;
+      if (thumbnailUrl !== undefined) updatePayload.thumbnail_url = thumbnailUrl || null;
+      if (videoUrl !== undefined) updatePayload.video_url = String(videoUrl).trim();
+      if (category !== undefined) updatePayload.category = category || null;
+      if (durationLabel !== undefined) updatePayload.duration_label = durationLabel || null;
+      if (sortOrder !== undefined) updatePayload.sort_order = Number(sortOrder) || 0;
+
+      const { data, error } = await supabase
+        .from('videos')
+        .update(updatePayload)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, video: data });
+    } catch (err: any) {
+      console.error("Error in PUT /api/admin/videos/:id:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/videos/:id", async (req, res) => {
+    try {
+      if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { error } = await supabase.from('videos').delete().eq('id', req.params.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in DELETE /api/admin/videos/:id:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get("/api/admin/videos", async (req, res) => {
+    try {
+      if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+
+      const bankId = String(req.query.bankId || '').trim();
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      let query = supabase.from('videos').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: false });
+      if (bankId) query = query.eq('bank_id', bankId);
+
+      const { data, error } = await query;
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, videos: data || [] });
+    } catch (err: any) {
+      console.error("Error in GET /api/admin/videos:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.get(["/api/subscriptions/status", "/api/subscriptions/my-status"], async (req, res) => {
     try {
       const requesterId = (
