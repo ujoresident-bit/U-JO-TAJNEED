@@ -154,7 +154,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 {isActive || session.isAdmin ? (
                   <>
                     <button
-                      onClick={() => onNavigate('bank', { bankId: bank.id })}
+                      onClick={() => onNavigate(bank.id === 'human_medicine' ? 'specialty_hub' : 'bank', { bankId: bank.id })}
                       className={`flex-1 py-3 rounded-xl ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} text-slate-950 font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95`}
                     >
                       <BookOpen className="w-4 h-4" />
