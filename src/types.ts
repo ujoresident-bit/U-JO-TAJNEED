@@ -40,6 +40,7 @@ export interface Question {
   groundingQueries?: string[];
   needsReview?: boolean;
   reviewNote?: string;
+  isMostCommon?: boolean;
   major: string;
   topic: string;
   subtopic?: string;
