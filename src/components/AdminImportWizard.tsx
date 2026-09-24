@@ -43,7 +43,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
 
   // Step 1: Selection
   const [selectedBank, setSelectedBank] = useState<string>('human_medicine');
-  const [selectedYear, setSelectedYear] = useState<number>(2025);
+  const [selectedYear, setSelectedYear] = useState<number | string>(2025);
 
   // Step 2: Textarea & File
   const [pastedText, setPastedText] = useState<string>('');
@@ -300,7 +300,10 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
               <label className="font-bold text-slate-200">Exam Year Batch</label>
               <select
                 value={selectedYear}
-                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setSelectedYear(/^\d+$/.test(raw) ? Number(raw) : raw);
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500"
               >
                 {Array.from({ length: 11 }, (_, i) => 2015 + i).map((yr) => (
@@ -308,6 +311,12 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
                     {yr} Residency Exam
                   </option>
                 ))}
+                {selectedBank === 'human_medicine' && (
+                  <>
+                    <option value="TAJNEED">TAJNEED</option>
+                    <option value="MADANI">MADANI</option>
+                  </>
+                )}
               </select>
               <p className="text-[11px] text-slate-500">
                 Applied authoritatively to every question in this uploaded file.
