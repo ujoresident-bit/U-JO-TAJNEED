@@ -134,11 +134,12 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
               </button>
             </div>
             <div className="aspect-video rounded-xl overflow-hidden bg-black">
-              <iframe
+              <video
                 src={activeVideo.video_url}
                 className="w-full h-full"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
+                controls
+                autoPlay
+                playsInline
               />
             </div>
             {activeVideo.description && (
