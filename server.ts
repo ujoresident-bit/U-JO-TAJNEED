@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from "express";
+import multer from "multer";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
@@ -4694,6 +4695,75 @@ function isUserAccountActive(userRow: any): boolean {
   // endpoint requires an active subscription for that bank (same gate as
   // questions); admin endpoints allow full CRUD management.
   // ============================================================
+
+  // Video/thumbnail files are uploaded as multipart/form-data and held in
+  // memory only long enough to forward the buffer to Supabase Storage —
+  // never written to local disk (this server's filesystem is ephemeral on
+  // Render and unsuitable for permanent file storage anyway).
+  const videoUpload = multer({
+    storage: multer.memoryStorage(),
+    // Matches this Supabase project's own global Storage file size limit
+    // (50MB) — keeping these in sync means an oversized file gets a clear
+    // error immediately here, instead of failing confusingly later at the
+    // Supabase Storage upload step.
+    limits: { fileSize: 50 * 1024 * 1024 }
+  });
+
+  // POST /api/admin/videos/upload — accepts a single file field named
+  // "file" plus a "kind" field ("video" or "thumbnail"), uploads it to the
+  // "videos" Supabase Storage bucket, and returns its public URL. The
+  // admin UI calls this once per file BEFORE creating/updating the video
+  // record, then saves the returned URL as thumbnailUrl/videoUrl.
+  app.post("/api/admin/videos/upload", (req, res, next) => {
+    videoUpload.single('file')(req, res, (err: any) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ success: false, error: "File is too large. This project's Storage limit is 50MB per file." });
+        }
+        return res.status(400).json({ success: false, error: err.message || "Upload failed." });
+      }
+      next();
+    });
+  }, async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+      if (!verifyServerAdminAuthorization(requesterId) && !verifyServerAdminAuthorization(requesterUsername)) {
+        return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      }
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) {
+        return res.status(400).json({ success: false, error: "No file was uploaded (expected field name 'file')." });
+      }
+
+      const kind = String(req.body?.kind || 'video');
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      const storagePath = `${kind}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from('videos')
+        .upload(storagePath, file.buffer, {
+          contentType: file.mimetype,
+          upsert: false
+        });
+
+      if (uploadErr) {
+        console.error('[VIDEO_UPLOAD] Supabase Storage error:', uploadErr.message);
+        return res.status(500).json({ success: false, error: `Storage upload failed: ${uploadErr.message}` });
+      }
+
+      const { data: publicUrlData } = supabase.storage.from('videos').getPublicUrl(storagePath);
+
+      return res.json({ success: true, url: publicUrlData.publicUrl, path: storagePath });
+    } catch (err: any) {
+      console.error("Error in POST /api/admin/videos/upload:", err);
+      return res.status(500).json({ success: false, error: err.message || "Upload failed." });
+    }
+  });
 
   // GET /api/videos?bankId=human_medicine — student-facing list, gated by
   // an active subscription for that specific bank.
