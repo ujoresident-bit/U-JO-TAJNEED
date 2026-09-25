@@ -629,7 +629,8 @@ export const previewImportBatch = (
   selectedBankId: string,
   selectedYear: number | string,
   jsonContent: string,
-  fileName: string
+  fileName: string,
+  forcedMajor?: string
 ): ImportPreviewResult => {
   if (!verifyTelegramAdminAuthorization()) {
     throw new Error('UNAUTHORIZED_ADMIN_ONLY: Only authorized admins can preview or import questions.');
@@ -797,7 +798,12 @@ export const previewImportBatch = (
     }
 
     // Question is valid! Process metadata
-    const majorStr = qObj.major && String(qObj.major).trim() ? String(qObj.major).trim() : null;
+    // QBANK BASIC batches force a single admin-chosen Major for every
+    // question, exactly as selectedYear is authoritative for every
+    // question regardless of what the source text says.
+    const majorStr = forcedMajor
+      ? forcedMajor
+      : (qObj.major && String(qObj.major).trim() ? String(qObj.major).trim() : null);
     const topicStr = qObj.topic && String(qObj.topic).trim() ? String(qObj.topic).trim() : null;
 
     const needsReview = !majorStr || !topicStr;
