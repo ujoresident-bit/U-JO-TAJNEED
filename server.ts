@@ -980,7 +980,7 @@ async function startServer() {
           // back into NaN/2025 on every fetch, even though they were
           // stored correctly — this is the exact fetch path the whole
           // app reads questions through.
-          year: (q.year === 'TAJNEED' || q.year === 'MADANI') ? q.year : Number(q.year || 2025),
+          year: (typeof q.year === 'string' && isNaN(Number(q.year))) ? q.year : Number(q.year || 2025),
           isMostCommon: Boolean(q.is_most_common ?? q.isMostCommon ?? false),
           difficulty: q.difficulty || 'Medium',
           classificationStatus: q.classification_status || q.classificationStatus || 'CLASSIFIED',
@@ -1049,7 +1049,7 @@ async function startServer() {
         // would silently strip the 'TAJNEED'/'MADANI' text label off any
         // question under those categories. Preserve string category
         // labels; only default to numeric 2025 when year is absent.
-        year: (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025),
+        year: (typeof qObj.year === 'string' && isNaN(Number(qObj.year))) ? qObj.year : Number(qObj.year || 2025),
         is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false)
       };
 
@@ -1111,7 +1111,7 @@ async function startServer() {
         // would silently strip the 'TAJNEED'/'MADANI' text label off any
         // question under those categories. Preserve string category
         // labels; only default to numeric 2025 when year is absent.
-        year: (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025),
+        year: (typeof qObj.year === 'string' && isNaN(Number(qObj.year))) ? qObj.year : Number(qObj.year || 2025),
         is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false)
       };
 
@@ -1332,7 +1332,7 @@ async function startServer() {
 
         // Preserve TAJNEED/MADANI string category labels through import —
         // never coerce them to a number.
-        const year = (qObj.year === 'TAJNEED' || qObj.year === 'MADANI') ? qObj.year : Number(qObj.year || 2025);
+        const year = (typeof qObj.year === 'string' && isNaN(Number(qObj.year))) ? qObj.year : Number(qObj.year || 2025);
         // ROOT CAUSE FIX: bank_id was never read from the incoming question
         // object here, so every imported question — including USMLE bank
         // questions explicitly tagged with bankId on the client — silently
