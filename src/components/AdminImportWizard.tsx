@@ -43,6 +43,12 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
 
   // Step 1: Selection
   const [selectedBank, setSelectedBank] = useState<string>('human_medicine');
+  // QBANK BASIC is its own selectable import target in the UI, but its
+  // questions are stored under bank_id='human_medicine' (so they inherit
+  // the same Human Medicine subscription/access — QBANK BASIC is reached
+  // as a card inside the Human Medicine hub, not a separately paid bank).
+  // This flag just changes which fields the wizard shows.
+  const [importTarget, setImportTarget] = useState<'human_medicine' | 'dentistry' | 'qbank_basic'>('human_medicine');
   const [selectedYear, setSelectedYear] = useState<number | string>(2025);
   // Human Medicine "Past Years" now requires choosing TAJNEED or MADANI
   // FIRST (mandatory, no default), then manually typing the year number —
@@ -52,21 +58,25 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
   const [examCategory, setExamCategory] = useState<'TAJNEED' | 'MADANI' | ''>('');
   const [manualYearInput, setManualYearInput] = useState<string>('2025');
 
-  // Keep the actual stored value in sync: Human Medicine combines the
-  // mandatory category with the manually typed year; Dentistry (no
-  // category concept requested) just uses the manual year as a number.
+  // Keep the actual stored value in sync: Human Medicine (Past Years)
+  // combines the mandatory category with the manually typed year;
+  // Dentistry uses the manual year as a number; QBANK BASIC doesn't use
+  // "year" as a meaningful concept at all (its own filter is Major-only),
+  // so it gets a fixed neutral label instead.
   useEffect(() => {
-    if (selectedBank === 'human_medicine') {
+    if (importTarget === 'human_medicine') {
       if (examCategory && manualYearInput.trim()) {
         setSelectedYear(`${examCategory} ${manualYearInput.trim()}`);
       }
+    } else if (importTarget === 'qbank_basic') {
+      setSelectedYear('QBANK_BASIC');
     } else {
       const n = Number(manualYearInput);
       if (manualYearInput.trim() && !isNaN(n)) {
         setSelectedYear(n);
       }
     }
-  }, [selectedBank, examCategory, manualYearInput]);
+  }, [importTarget, examCategory, manualYearInput]);
 
   // Step 2: Textarea & File
   const [pastedText, setPastedText] = useState<string>('');
@@ -307,12 +317,23 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
             <div className="space-y-1.5">
               <label className="font-bold text-slate-200">Target Question Bank</label>
               <select
-                value={selectedBank}
-                onChange={(e) => setSelectedBank(e.target.value)}
+                value={importTarget}
+                onChange={(e) => {
+                  const target = e.target.value as 'human_medicine' | 'dentistry' | 'qbank_basic';
+                  setImportTarget(target);
+                  // QBANK BASIC questions are stored under human_medicine
+                  // (same subscription/access), so the actual bank_id sent
+                  // to the server is always human_medicine here.
+                  setSelectedBank(target === 'qbank_basic' ? 'human_medicine' : target);
+                  if (target === 'qbank_basic') {
+                    setExamCategory('');
+                  }
+                }}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500"
               >
-                <option value="human_medicine">Human Medicine</option>
+                <option value="human_medicine">Human Medicine — Past Years</option>
                 <option value="dentistry">Dentistry</option>
+                <option value="qbank_basic">QBANK BASIC</option>
               </select>
               <p className="text-[11px] text-slate-500">
                 Determines the destination bank collection for this batch.
@@ -320,9 +341,11 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
             </div>
 
             <div className="space-y-1.5">
-              <label className="font-bold text-slate-200">Exam Year Batch</label>
+              <label className="font-bold text-slate-200">
+                {importTarget === 'qbank_basic' ? 'Content Type' : 'Exam Year Batch'}
+              </label>
 
-              {selectedBank === 'human_medicine' ? (
+              {importTarget === 'human_medicine' ? (
                 <>
                   {/* Mandatory category choice — no default, must pick one */}
                   <div className="flex gap-2">
@@ -363,6 +386,11 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
                     className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 focus:outline-none focus:border-cyan-500 disabled:opacity-40"
                   />
                 </>
+              ) : importTarget === 'qbank_basic' ? (
+                <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
+                  No year or category needed here — just set each question's <strong>Major</strong> to one of:
+                  <span className="block mt-1 font-mono text-[11px]">Pharmacology · Microbiology · Immunology · Anatomy</span>
+                </div>
               ) : (
                 <input
                   type="number"
@@ -382,7 +410,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
           <div className="flex justify-end pt-2">
             <button
               onClick={() => setStep(2)}
-              disabled={selectedBank === 'human_medicine' && !examCategory}
+              disabled={importTarget === 'human_medicine' && !examCategory}
               className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold flex items-center gap-2 transition-all shadow-md shadow-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>Next: Paste Questions</span>
@@ -399,7 +427,8 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
             <div>
               <span className="text-slate-400">Target Configuration: </span>
               <strong className="text-cyan-400">
-                {selectedBank === 'dentistry' ? 'Dentistry' : 'Human Medicine'} ({selectedYear} Exam Batch)
+                {importTarget === 'dentistry' ? 'Dentistry' : importTarget === 'qbank_basic' ? 'QBANK BASIC' : 'Human Medicine'}
+                {importTarget !== 'qbank_basic' && ` (${selectedYear} Exam Batch)`}
               </strong>
             </div>
             <button
