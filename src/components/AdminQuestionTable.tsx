@@ -340,7 +340,8 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none"
             >
               <option value="All">All Banks</option>
-              <option value="human_medicine">MOH Bank</option>
+              <option value="human_medicine">Human Medicine</option>
+              <option value="dentistry">Dentistry</option>
             </select>
           </div>
 
