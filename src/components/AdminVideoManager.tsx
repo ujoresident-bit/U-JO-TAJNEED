@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Clapperboard, Plus, Trash2, Pencil, X, Save } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Clapperboard, Plus, Trash2, Pencil, X, Save, Upload, Loader2, CheckCircle2 } from 'lucide-react';
 import { resolveSession } from '../services/authService';
 
 interface VideoItem {
@@ -25,10 +25,9 @@ const EMPTY_FORM = {
   sortOrder: 0
 };
 
-// Admin CRUD for the Netflix-style video library. Videos are referenced
-// by URL (e.g. a YouTube/Vimeo embed link) rather than uploaded as raw
-// binary files, since this app has no video-hosting infrastructure of
-// its own — admins host the file elsewhere and paste the link here.
+// Admin CRUD for the Netflix-style video library. Video and thumbnail
+// FILES are uploaded directly (to Supabase Storage's "videos" bucket via
+// the server), not pasted as external links.
 export const AdminVideoManager: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,13 +36,18 @@ export const AdminVideoManager: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploadingVideo, setUploadingVideo] = useState(false);
+  const [uploadingThumb, setUploadingThumb] = useState(false);
+
+  const videoFileRef = useRef<HTMLInputElement>(null);
+  const thumbFileRef = useRef<HTMLInputElement>(null);
 
   const user = resolveSession().user;
   const authHeaders = {
-    'Content-Type': 'application/json',
     'x-telegram-user-id': user.telegramId || '',
     'x-telegram-username': user.username || ''
   };
+  const jsonAuthHeaders = { 'Content-Type': 'application/json', ...authHeaders };
 
   const loadVideos = () => {
     setLoading(true);
@@ -82,13 +86,53 @@ export const AdminVideoManager: React.FC = () => {
     setShowForm(true);
   };
 
+  const uploadFile = async (file: File, kind: 'video' | 'thumbnail'): Promise<string | null> => {
+    const setUploading = kind === 'video' ? setUploadingVideo : setUploadingThumb;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('kind', kind);
+      const res = await fetch('/api/admin/videos/upload', {
+        method: 'POST',
+        headers: authHeaders, // no Content-Type — the browser sets the multipart boundary itself
+        body: fd
+      });
+      const data = await res.json();
+      if (data.success) return data.url as string;
+      alert(data.error || `Failed to upload ${kind}.`);
+      return null;
+    } catch (err) {
+      alert(`Network error while uploading ${kind}.`);
+      return null;
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleVideoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await uploadFile(file, 'video');
+    if (url) setForm((f) => ({ ...f, videoUrl: url }));
+    if (videoFileRef.current) videoFileRef.current.value = '';
+  };
+
+  const handleThumbFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await uploadFile(file, 'thumbnail');
+    if (url) setForm((f) => ({ ...f, thumbnailUrl: url }));
+    if (thumbFileRef.current) thumbFileRef.current.value = '';
+  };
+
   const handleSave = async () => {
     if (!form.title.trim() || !form.videoUrl.trim()) return;
     setSaving(true);
     try {
       const url = editingId ? `/api/admin/videos/${editingId}` : '/api/admin/videos';
       const method = editingId ? 'PUT' : 'POST';
-      const res = await fetch(url, { method, headers: authHeaders, body: JSON.stringify(form) });
+      const res = await fetch(url, { method, headers: jsonAuthHeaders, body: JSON.stringify(form) });
       const data = await res.json();
       if (data.success) {
         setShowForm(false);
@@ -178,23 +222,68 @@ export const AdminVideoManager: React.FC = () => {
                 className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
               />
             </div>
+
+            {/* Video file upload */}
             <div className="space-y-1 sm:col-span-2">
-              <label className="text-slate-400 font-bold">Video URL (embed link) *</label>
-              <input
-                value={form.videoUrl}
-                onChange={(e) => setForm({ ...form, videoUrl: e.target.value })}
-                placeholder="https://www.youtube.com/embed/VIDEO_ID"
-                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
-              />
+              <label className="text-slate-400 font-bold">Video File *</label>
+              <input ref={videoFileRef} type="file" accept="video/*" onChange={handleVideoFileChange} className="hidden" />
+              <button
+                type="button"
+                onClick={() => videoFileRef.current?.click()}
+                disabled={uploadingVideo}
+                className="w-full px-3 py-2.5 rounded-lg bg-slate-950 border border-dashed border-slate-700 hover:border-purple-500 text-slate-300 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {uploadingVideo ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Uploading video...</span>
+                  </>
+                ) : form.videoUrl ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-300">Video uploaded — click to replace</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>Choose video file to upload</span>
+                  </>
+                )}
+              </button>
             </div>
+
+            {/* Thumbnail file upload */}
             <div className="space-y-1 sm:col-span-2">
-              <label className="text-slate-400 font-bold">Thumbnail URL (optional)</label>
-              <input
-                value={form.thumbnailUrl}
-                onChange={(e) => setForm({ ...form, thumbnailUrl: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
-              />
+              <label className="text-slate-400 font-bold">Thumbnail Image (optional)</label>
+              <input ref={thumbFileRef} type="file" accept="image/*" onChange={handleThumbFileChange} className="hidden" />
+              <button
+                type="button"
+                onClick={() => thumbFileRef.current?.click()}
+                disabled={uploadingThumb}
+                className="w-full px-3 py-2.5 rounded-lg bg-slate-950 border border-dashed border-slate-700 hover:border-purple-500 text-slate-300 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {uploadingThumb ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Uploading thumbnail...</span>
+                  </>
+                ) : form.thumbnailUrl ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-300">Thumbnail uploaded — click to replace</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>Choose thumbnail image to upload</span>
+                  </>
+                )}
+              </button>
+              {form.thumbnailUrl && (
+                <img src={form.thumbnailUrl} alt="Thumbnail preview" className="w-32 h-20 object-cover rounded-lg mt-1 border border-slate-800" />
+              )}
             </div>
+
             <div className="space-y-1">
               <label className="text-slate-400 font-bold">Duration Label (optional)</label>
               <input
@@ -216,7 +305,7 @@ export const AdminVideoManager: React.FC = () => {
           </div>
           <button
             onClick={handleSave}
-            disabled={saving || !form.title.trim() || !form.videoUrl.trim()}
+            disabled={saving || uploadingVideo || uploadingThumb || !form.title.trim() || !form.videoUrl.trim()}
             className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
