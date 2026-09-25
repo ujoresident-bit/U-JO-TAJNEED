@@ -56,6 +56,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
   // 2023"), which appears as its own distinct filter chip on the
   // student-facing Past Years page automatically.
   const [examCategory, setExamCategory] = useState<'TAJNEED' | 'MADANI' | ''>('');
+  const [qbankBasicMajor, setQbankBasicMajor] = useState<string>('');
   const [manualYearInput, setManualYearInput] = useState<string>('2025');
 
   // Keep the actual stored value in sync: Human Medicine (Past Years)
@@ -136,7 +137,13 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
 
     try {
       setFileError(null);
-      const preview = previewImportBatch(selectedBank, selectedYear, textContent, fileName || `${selectedYear}_pasted_batch.txt`);
+      const preview = previewImportBatch(
+        selectedBank,
+        selectedYear,
+        textContent,
+        fileName || `${selectedYear}_pasted_batch.txt`,
+        importTarget === 'qbank_basic' ? qbankBasicMajor : undefined
+      );
       setPreviewResult(preview);
       setProcessedQuestions(preview.validQuestions);
       if (preview.duplicateQuestions.length > 0) {
@@ -387,10 +394,30 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
                   />
                 </>
               ) : importTarget === 'qbank_basic' ? (
-                <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
-                  No year or category needed here — just set each question's <strong>Major</strong> to one of:
-                  <span className="block mt-1 font-mono text-[11px]">Pharmacology · Microbiology · Immunology · Anatomy</span>
-                </div>
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    {['Pharmacology', 'Microbiology', 'Immunology', 'Anatomy'].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setQbankBasicMajor(m)}
+                        className={`px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                          qbankBasicMajor === m
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  {!qbankBasicMajor && (
+                    <p className="text-[11px] text-rose-400">Required: choose one subject for this batch.</p>
+                  )}
+                  <p className="text-[11px] text-slate-500">
+                    This subject will be applied authoritatively to every question in this file, overriding any Major found in the pasted text.
+                  </p>
+                </>
               ) : (
                 <input
                   type="number"
@@ -410,7 +437,10 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
           <div className="flex justify-end pt-2">
             <button
               onClick={() => setStep(2)}
-              disabled={importTarget === 'human_medicine' && !examCategory}
+              disabled={
+                (importTarget === 'human_medicine' && !examCategory) ||
+                (importTarget === 'qbank_basic' && !qbankBasicMajor)
+              }
               className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold flex items-center gap-2 transition-all shadow-md shadow-cyan-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <span>Next: Paste Questions</span>
@@ -427,7 +457,11 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
             <div>
               <span className="text-slate-400">Target Configuration: </span>
               <strong className="text-cyan-400">
-                {importTarget === 'dentistry' ? 'Dentistry' : importTarget === 'qbank_basic' ? 'QBANK BASIC' : 'Human Medicine'}
+                {importTarget === 'dentistry'
+                  ? 'Dentistry'
+                  : importTarget === 'qbank_basic'
+                  ? `QBANK BASIC — ${qbankBasicMajor}`
+                  : 'Human Medicine'}
                 {importTarget !== 'qbank_basic' && ` (${selectedYear} Exam Batch)`}
               </strong>
             </div>
