@@ -23,7 +23,8 @@ export const QBankBasicView: React.FC<QBankBasicViewProps> = ({ bankId, onNaviga
         bankId,
         majors: BASIC_MAJORS,
         statusFilter: 'ALL',
-        userId: user.telegramId
+        userId: user.telegramId,
+        includeQBankBasic: true
       }).length,
     [bankId, user.telegramId]
   );
@@ -33,7 +34,7 @@ export const QBankBasicView: React.FC<QBankBasicViewProps> = ({ bankId, onNaviga
     try {
       const block = await startBlock(
         user.telegramId,
-        { bankId, majors: BASIC_MAJORS, statusFilter: 'UNUSED', userId: user.telegramId },
+        { bankId, majors: BASIC_MAJORS, statusFilter: 'UNUSED', userId: user.telegramId, includeQBankBasic: true },
         bankId
       );
       onNavigate('question_screen', { blockId: block.id });
