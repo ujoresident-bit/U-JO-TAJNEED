@@ -213,7 +213,15 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
 
   // Calculate dynamic meta counts from stored questions
   const totalQuestions = questions.length;
-  const yearsAvailable = Array.from(new Set(questions.map((q) => q.year))).sort((a, b) => {
+  const yearsAvailable = Array.from(
+    new Set(
+      questions
+        .map((q) => q.year)
+        // QBANK_BASIC is a separate content pool reached via its own card,
+        // not a Past Years category — never show it as a filter chip here.
+        .filter((y) => y !== 'QBANK_BASIC')
+    )
+  ).sort((a, b) => {
     // Numeric years sort numerically and always come before non-numeric
     // category labels (like 'TAJNEED'/'MADANI'), which sort alphabetically
     // among themselves.
@@ -309,6 +317,13 @@ export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
   // silently mixing U JO MOH and U JO MAJORS QBANK questions together.
   const allQuestions = getStoredQuestions().filter(
     (q) => !filters.bankId || q.bankId === filters.bankId
+  ).filter(
+    // QBANK BASIC is a separate, Major-only content pool reached via its
+    // own dedicated card — it must never silently mix into a general
+    // Past Years browse/exam-block just because no year filter was set.
+    // Callers that DO want QBANK BASIC content (QBankBasicView) opt in
+    // explicitly via filters.includeQBankBasic.
+    (q) => filters.includeQBankBasic || q.year !== 'QBANK_BASIC'
   );
 
   let answeredSet: Set<string> | null = null;
