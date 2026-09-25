@@ -159,6 +159,32 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           color: transparent;
           animation: ujo-shimmer 6s linear infinite;
         }
+        .ujo-glass {
+          background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+          backdrop-filter: blur(20px) saturate(140%);
+          -webkit-backdrop-filter: blur(20px) saturate(140%);
+          border: 1px solid rgba(255,255,255,0.12);
+          box-shadow:
+            inset 0 1px 0 0 rgba(255,255,255,0.15),
+            inset 0 0 40px 0 rgba(255,255,255,0.02),
+            0 8px 32px 0 rgba(0,0,0,0.4);
+        }
+        .ujo-glass::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0; height: 50%;
+          background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 100%);
+          pointer-events: none;
+        }
+        .ujo-glass::after {
+          content: '';
+          position: absolute;
+          top: -50%; left: -20%;
+          width: 60%; height: 200%;
+          background: linear-gradient(115deg, transparent 40%, rgba(255,255,255,0.06) 50%, transparent 60%);
+          transform: rotate(0deg);
+          pointer-events: none;
+        }
       `}</style>
 
       {/* Cosmic backdrop, sized to this page's own content — absolute
@@ -241,7 +267,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
           return (
             <div
               key={bank.id}
-              className="ujo-anim-item relative overflow-hidden p-6 space-y-4 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-white/25 hover:-translate-y-1 transition-all duration-300 group"
+              className="ujo-anim-item ujo-glass relative overflow-hidden p-6 space-y-4 rounded-2xl hover:border-white/30 hover:-translate-y-1 transition-all duration-300 group"
               style={{ animationDelay: `${120 + bankIdx * 110}ms` }}
             >
               <div className={`absolute top-0 right-0 w-40 h-40 ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} opacity-[0.07] group-hover:opacity-[0.12] blur-[80px] -mr-16 -mt-16 pointer-events-none transition-opacity duration-300`} />
@@ -334,7 +360,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div
           onClick={() => onNavigate('progress')}
-          className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-purple-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
+          className="ujo-anim-item ujo-glass relative overflow-hidden p-6 rounded-2xl hover:border-purple-500/40 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
           style={{ animationDelay: '340ms' }}
         >
           <div className="p-3 rounded-xl bg-purple-500/10 text-purple-400 group-hover:scale-110 transition-transform">
@@ -347,7 +373,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 
         <div
           onClick={() => onNavigate('subscription')}
-          className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-amber-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
+          className="ujo-anim-item ujo-glass relative overflow-hidden p-6 rounded-2xl hover:border-amber-500/40 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
           style={{ animationDelay: '420ms' }}
         >
           <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 group-hover:scale-110 transition-transform">
@@ -361,7 +387,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         {session.isAdmin ? (
           <div
             onClick={() => onNavigate('admin')}
-            className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-cyan-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
+            className="ujo-anim-item ujo-glass relative overflow-hidden p-6 rounded-2xl hover:border-cyan-500/40 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
             style={{ animationDelay: '500ms' }}
           >
             <div className="p-3 rounded-xl bg-white/5 text-slate-300 group-hover:scale-110 transition-transform">
@@ -374,7 +400,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         ) : (
           <div
             onClick={() => onNavigate('progress')}
-            className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-emerald-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
+            className="ujo-anim-item ujo-glass relative overflow-hidden p-6 rounded-2xl hover:border-emerald-500/40 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
             style={{ animationDelay: '500ms' }}
           >
             <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 group-hover:scale-110 transition-transform">
