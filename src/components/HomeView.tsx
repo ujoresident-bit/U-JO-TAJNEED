@@ -161,8 +161,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
         }
       `}</style>
 
-      {/* Persistent cosmic backdrop with depth + mouse parallax */}
-      <div className="fixed inset-0 -z-10 pointer-events-none overflow-hidden bg-black">
+      {/* Cosmic backdrop, sized to this page's own content — absolute
+          instead of fixed, since fixed positioning breaks unexpectedly
+          when any ancestor has a transform/filter (common in app shells),
+          silently pinning it off-screen or behind other content. */}
+      <div className="absolute inset-0 -z-10 pointer-events-none overflow-hidden bg-black">
         <div style={parallaxFar} className="absolute inset-0 transition-transform duration-300 ease-out">
           {farStars.map((star, i) => (
             <div
