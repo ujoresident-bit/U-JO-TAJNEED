@@ -107,6 +107,7 @@ export interface BlockFilters {
   statusFilter?: QuestionStatusFilter;
   userId?: string;
   bankId?: string;
+  includeQBankBasic?: boolean;
 }
 
 export interface BlockAnswer {
