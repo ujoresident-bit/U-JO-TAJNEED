@@ -1359,6 +1359,7 @@ async function startServer() {
           review_note: qObj.reviewNote || qObj.review_note || null,
           major: qObj.major ? String(qObj.major).trim() : 'General Medical Sciences',
           topic: qObj.topic ? String(qObj.topic).trim() : 'Unassigned Topic',
+          is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false),
           year
         });
       });
