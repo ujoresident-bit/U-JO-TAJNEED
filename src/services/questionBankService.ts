@@ -630,7 +630,8 @@ export const previewImportBatch = (
   selectedYear: number | string,
   jsonContent: string,
   fileName: string,
-  forcedMajor?: string
+  forcedMajor?: string,
+  forceMostCommon?: boolean
 ): ImportPreviewResult => {
   if (!verifyTelegramAdminAuthorization()) {
     throw new Error('UNAUTHORIZED_ADMIN_ONLY: Only authorized admins can preview or import questions.');
@@ -837,6 +838,7 @@ export const previewImportBatch = (
       major: majorStr || 'General Medical Sciences',
       topic: topicStr || 'Unassigned Topic',
       difficulty: qObj.difficulty && ['Easy', 'Medium', 'Hard'].includes(qObj.difficulty) ? qObj.difficulty : 'Medium',
+      isMostCommon: Boolean(forceMostCommon || qObj.isMostCommon || false),
       classificationStatus: (qObj.needsReview || needsReview) ? 'NEEDS_REVIEW' : 'CLASSIFIED',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
