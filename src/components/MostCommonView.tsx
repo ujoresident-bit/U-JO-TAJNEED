@@ -1,58 +1,45 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Eye, Sparkles } from 'lucide-react';
-import { getStoredQuestions, syncQuestionsWithSupabase } from '../services/questionBankService';
-import { Question } from '../types';
+import { getFlashcards, syncFlashcardsFromSupabase } from '../services/flashcardService';
+import { Flashcard } from '../types';
 
 interface MostCommonViewProps {
-  bankId: string;
   onNavigate: (view: string, params?: any) => void;
 }
 
-const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E'] as const;
-
-// Deliberately styled differently from FlashcardsView's 3D flip card:
-// no rotation, no "front/back" — instead the question stem is shown with
-// the correct option blanked out (fill-in-the-blank style), and a single
-// tap reveals it in place along with a short explanation.
-export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNavigate }) => {
-  const [questions, setQuestions] = useState<Question[]>(() =>
-    getStoredQuestions().filter((q) => q.bankId === bankId && q.isMostCommon)
-  );
+// Most Common is a simple Q&A content set — NOT tied to any question
+// bank — reusing the exact same underlying data model as Flashcards
+// (cardType: 'most_common'), but displayed with a fill-in-the-blank
+// reveal style instead of a flip animation, to feel visually distinct.
+export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) => {
+  const [cards, setCards] = useState<Flashcard[]>(() => getFlashcards('most_common'));
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
-    syncQuestionsWithSupabase()
+    syncFlashcardsFromSupabase('most_common')
       .then((synced) => {
-        if (synced && synced.length > 0) {
-          setQuestions(synced.filter((q) => q.bankId === bankId && q.isMostCommon));
-        }
+        if (synced && synced.length > 0) setCards(synced);
       })
       .catch(() => {});
-  }, [bankId]);
+  }, []);
 
-  const current = questions[index];
-
-  const optionText = useMemo(() => {
-    if (!current) return '';
-    const key = current.correctAnswer;
-    return (current.options as any)[key] || '';
-  }, [current]);
+  const current = cards[index];
 
   const goNext = () => {
     setRevealed(false);
-    setIndex((i) => Math.min(i + 1, Math.max(questions.length - 1, 0)));
+    setIndex((i) => Math.min(i + 1, Math.max(cards.length - 1, 0)));
   };
   const goPrev = () => {
     setRevealed(false);
     setIndex((i) => Math.max(i - 1, 0));
   };
 
-  if (questions.length === 0) {
+  if (cards.length === 0) {
     return (
       <div className="max-w-2xl mx-auto space-y-6 pb-12 text-center">
         <button
-          onClick={() => onNavigate('specialty_hub', { bankId })}
+          onClick={() => onNavigate('home')}
           className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors mx-auto"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -60,8 +47,8 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNaviga
         </button>
         <div className="glass-panel p-10 space-y-3">
           <Sparkles className="w-10 h-10 text-amber-400 mx-auto" />
-          <h2 className="text-lg font-bold text-slate-100">No Most Common items yet</h2>
-          <p className="text-xs text-slate-400">Your admin hasn't marked any questions as "Most Common" for this bank yet.</p>
+          <h2 className="text-lg font-bold text-slate-100">No Most Common cards yet</h2>
+          <p className="text-xs text-slate-400">Your admin hasn't added any Most Common cards yet.</p>
         </div>
       </div>
     );
@@ -71,13 +58,13 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNaviga
     <div className="max-w-2xl mx-auto space-y-6 pb-12">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => onNavigate('specialty_hub', { bankId })}
+          onClick={() => onNavigate('home')}
           className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
           <span>Back</span>
         </button>
-        <span className="text-xs font-bold text-slate-500">{index + 1} / {questions.length}</span>
+        <span className="text-xs font-bold text-slate-500">{index + 1} / {cards.length}</span>
       </div>
 
       <div className="glass-panel p-6 sm:p-8 space-y-6 border-l-4 border-amber-500">
@@ -88,20 +75,21 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNaviga
 
         <p className="text-slate-100 text-base leading-relaxed">{current.question}</p>
 
-        <div className="flex items-center gap-2 flex-wrap text-sm">
-          <span className="text-slate-400">Answer:</span>
+        {/* Fill-in-the-blank style: a dashed blank until revealed */}
+        <div className="space-y-2">
+          <span className="text-slate-400 text-sm">Answer:</span>
           {revealed ? (
-            <span className="px-3 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 font-bold border border-emerald-500/30">
-              {OPTION_LABELS.find((k) => k === current.correctAnswer)}. {optionText}
-            </span>
+            <p className="p-3 rounded-lg bg-emerald-500/15 text-emerald-300 font-medium border border-emerald-500/30 leading-relaxed">
+              {current.answer}
+            </p>
           ) : (
-            <span className="px-6 py-1 rounded-lg border-b-2 border-dashed border-slate-600 text-transparent select-none">
-              ____________________
-            </span>
+            <div className="p-3 rounded-lg border-b-2 border-dashed border-slate-600">
+              <span className="text-transparent select-none">____________________________________</span>
+            </div>
           )}
         </div>
 
-        {!revealed ? (
+        {!revealed && (
           <button
             onClick={() => setRevealed(true)}
             className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
@@ -109,12 +97,6 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNaviga
             <Eye className="w-4 h-4" />
             <span>Reveal Answer</span>
           </button>
-        ) : (
-          current.explanation && (
-            <div className="p-4 rounded-xl bg-white/5 border border-white/5 text-xs text-slate-300 leading-relaxed">
-              {current.explanation}
-            </div>
-          )
         )}
       </div>
 
@@ -129,7 +111,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ bankId, onNaviga
         </button>
         <button
           onClick={goNext}
-          disabled={index >= questions.length - 1}
+          disabled={index >= cards.length - 1}
           className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 disabled:opacity-30"
         >
           <span>Next</span>
