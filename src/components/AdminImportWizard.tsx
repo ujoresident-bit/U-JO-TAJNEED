@@ -57,9 +57,6 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
   // student-facing Past Years page automatically.
   const [examCategory, setExamCategory] = useState<'TAJNEED' | 'MADANI' | ''>('');
   const [qbankBasicMajor, setQbankBasicMajor] = useState<string>('');
-  // Bulk "Most Common" tagging — applies to the whole batch, for Human
-  // Medicine/Dentistry imports, alongside their normal year/category.
-  const [markAsMostCommon, setMarkAsMostCommon] = useState<boolean>(false);
   const [manualYearInput, setManualYearInput] = useState<string>('2025');
 
   // Keep the actual stored value in sync: Human Medicine (Past Years)
@@ -145,8 +142,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
         selectedYear,
         textContent,
         fileName || `${selectedYear}_pasted_batch.txt`,
-        importTarget === 'qbank_basic' ? qbankBasicMajor : undefined,
-        markAsMostCommon
+        importTarget === 'qbank_basic' ? qbankBasicMajor : undefined
       );
       setPreviewResult(preview);
       setProcessedQuestions(preview.validQuestions);
@@ -436,20 +432,6 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
                 Applied authoritatively to every question in this uploaded file.
               </p>
             </div>
-
-            {(importTarget === 'human_medicine' || importTarget === 'dentistry') && (
-              <label className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-amber-500/40 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={markAsMostCommon}
-                  onChange={(e) => setMarkAsMostCommon(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500"
-                />
-                <span className="text-xs text-slate-300">
-                  Also mark every question in this batch as <strong className="text-amber-400">Most Common</strong>
-                </span>
-              </label>
-            )}
           </div>
 
           <div className="flex justify-end pt-2">
