@@ -116,7 +116,7 @@ export default function App() {
               bankLabel={viewParams.bankId === 'dentistry' ? 'Dentistry' : 'Human Medicine'}
             />
           )}
-          {currentView === 'most_common' && <MostCommonView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
+          {currentView === 'most_common' && <MostCommonView onNavigate={handleNavigate} />}
           {currentView === 'videos' && <VideosView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
           {currentView === 'qbank_basic' && <QBankBasicView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
 
