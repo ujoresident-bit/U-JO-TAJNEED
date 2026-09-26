@@ -197,17 +197,6 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
     }
   };
 
-  // Toggle whether a question is marked "Most Common" — reuses the exact
-  // same update endpoint as full question edits, just flipping one field.
-  const handleToggleMostCommon = async (q: Question) => {
-    try {
-      await updateSingleQuestion({ ...q, isMostCommon: !q.isMostCommon }, adminUserId);
-      reloadData();
-    } catch (err: any) {
-      setActionError(err.message || 'Failed to update Most Common status.');
-    }
-  };
-
   // Handle Migration from Local Storage to Supabase
   const handleMigrateToSupabase = async () => {
     setIsMigrating(true);
@@ -458,13 +447,6 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
                     </td>
                     <td className="p-3.5 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1">
-                        <button
-                          onClick={() => handleToggleMostCommon(q)}
-                          className={`p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors ${q.isMostCommon ? 'text-amber-400' : 'text-slate-500'}`}
-                          title={q.isMostCommon ? 'Marked as Most Common (click to unmark)' : 'Mark as Most Common'}
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                        </button>
                         <button
                           onClick={() => setViewQuestion(q)}
                           className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
