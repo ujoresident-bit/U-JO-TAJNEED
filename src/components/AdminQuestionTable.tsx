@@ -91,8 +91,15 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
       if (!matchText) return false;
     }
 
-    if (selectedBank !== 'All' && q.bankId !== selectedBank) return false;
-    if (selectedYear !== 'All' && q.year !== Number(selectedYear)) return false;
+    if (selectedBank === 'qbank_basic') {
+      // QBANK BASIC isn't a real separate bank — it's Human Medicine
+      // questions specifically tagged with the QBANK_BASIC marker (Major
+      // is what actually scopes them, not a year/category at all).
+      if (q.bankId !== 'human_medicine' || q.year !== 'QBANK_BASIC') return false;
+    } else if (selectedBank !== 'All' && q.bankId !== selectedBank) {
+      return false;
+    }
+    if (selectedYear !== 'All' && String(q.year) !== String(selectedYear)) return false;
     if (selectedMajor !== 'All' && q.major !== selectedMajor) return false;
     if (selectedClassification !== 'All') {
       const status = q.classificationStatus || 'CLASSIFIED';
@@ -219,7 +226,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
     try {
       const jsonStr = exportQuestionsJSON({
         bankId: selectedBank,
-        year: selectedYear !== 'All' ? Number(selectedYear) : undefined,
+        year: selectedYear !== 'All' ? selectedYear : undefined,
         major: selectedMajor,
         classificationStatus: selectedClassification
       });
@@ -325,30 +332,44 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
             </label>
             <select
               value={selectedBank}
-              onChange={(e) => setSelectedBank(e.target.value)}
+              onChange={(e) => {
+                setSelectedBank(e.target.value);
+                // QBANK BASIC isn't year-restricted — clear any stale year
+                // filter so it can't silently zero out every result (a
+                // numeric year filter would never match the QBANK_BASIC
+                // marker these questions actually carry).
+                if (e.target.value === 'qbank_basic') {
+                  setSelectedYear('All');
+                }
+              }}
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none"
             >
               <option value="All">All Banks</option>
               <option value="human_medicine">Human Medicine</option>
               <option value="dentistry">Dentistry</option>
+              <option value="qbank_basic">QBANK BASIC</option>
             </select>
           </div>
 
-          <div>
+          <div className={selectedBank === 'qbank_basic' ? 'opacity-40 pointer-events-none' : ''}>
             <label className="text-[10px] text-slate-400 font-semibold uppercase block mb-1">
-              Exam Year
+              Exam Year {selectedBank === 'qbank_basic' && '(N/A)'}
             </label>
             <select
               value={selectedYear}
               onChange={(e) => setSelectedYear(e.target.value)}
+              disabled={selectedBank === 'qbank_basic'}
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none"
             >
-              <option value="All">All Years (2015-2025)</option>
-              {Array.from({ length: 11 }, (_, i) => 2015 + i).map((yr) => (
-                <option key={yr} value={yr}>
-                  {yr}
-                </option>
-              ))}
+              <option value="All">
+                {selectedBank === 'qbank_basic' ? 'Not year-restricted' : 'All Years (2015-2025)'}
+              </option>
+              {selectedBank !== 'qbank_basic' &&
+                Array.from({ length: 11 }, (_, i) => 2015 + i).map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
             </select>
           </div>
 
