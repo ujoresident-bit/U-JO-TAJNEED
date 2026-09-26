@@ -217,9 +217,9 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
     new Set(
       questions
         .map((q) => q.year)
-        // QBANK_BASIC is a separate content pool reached via its own card,
-        // not a Past Years category — never show it as a filter chip here.
-        .filter((y) => y !== 'QBANK_BASIC')
+        // QBANK_BASIC and MOST_COMMON are separate content pools reached
+        // via their own dedicated cards, not Past Years categories.
+        .filter((y) => y !== 'QBANK_BASIC' && y !== 'MOST_COMMON')
     )
   ).sort((a, b) => {
     // Numeric years sort numerically and always come before non-numeric
@@ -323,7 +323,7 @@ export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
     // Past Years browse/exam-block just because no year filter was set.
     // Callers that DO want QBANK BASIC content (QBankBasicView) opt in
     // explicitly via filters.includeQBankBasic.
-    (q) => filters.includeQBankBasic || q.year !== 'QBANK_BASIC'
+    (q) => filters.includeQBankBasic || (q.year !== 'QBANK_BASIC' && q.year !== 'MOST_COMMON')
   );
 
   let answeredSet: Set<string> | null = null;
@@ -1191,19 +1191,34 @@ export const getQuestionBankStatsOverview = (bankId?: string) => {
   // scopes every count below to just that bank; omitting it preserves the
   // old "everything combined" behavior for any other caller that still
   // needs it.
-  const questions = getStoredQuestions().filter((q) => !bankId || q.bankId === bankId);
+  //
+  // QBANK BASIC isn't a real separate bankId — it's Human Medicine
+  // questions tagged with the QBANK_BASIC marker (Major-only, not
+  // year-restricted). It's carved out here as its own scope, and
+  // correspondingly EXCLUDED from plain 'human_medicine' stats so the two
+  // never double-count the same questions.
+  const questions = getStoredQuestions().filter((q) => {
+    if (!bankId) return true;
+    if (bankId === 'qbank_basic') return q.bankId === 'human_medicine' && q.year === 'QBANK_BASIC';
+    if (bankId === 'human_medicine') return q.bankId === 'human_medicine' && q.year !== 'QBANK_BASIC';
+    return q.bankId === bankId;
+  });
   const total = questions.length;
 
-  // Year breakdown
+  // Year breakdown — meaningless for QBANK BASIC (Major-only, not
+  // year-restricted), so it's left empty for that scope; the component
+  // hides this section entirely when bankId === 'qbank_basic'.
   const yearCounts: Record<number, number> = {};
-  for (let y = 2015; y <= 2025; y++) {
-    yearCounts[y] = 0;
-  }
-  questions.forEach((q) => {
-    if (typeof q.year === 'number' && q.year >= 2015 && q.year <= 2025) {
-      yearCounts[q.year] = (yearCounts[q.year] || 0) + 1;
+  if (bankId !== 'qbank_basic') {
+    for (let y = 2015; y <= 2025; y++) {
+      yearCounts[y] = 0;
     }
-  });
+    questions.forEach((q) => {
+      if (typeof q.year === 'number' && q.year >= 2015 && q.year <= 2025) {
+        yearCounts[q.year] = (yearCounts[q.year] || 0) + 1;
+      }
+    });
+  }
 
   // Major breakdown
   const majorCounts: Record<string, number> = {};
