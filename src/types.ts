@@ -237,6 +237,10 @@ export interface Flashcard {
   major?: string | null;
   topic?: string | null;
   isCustom?: boolean;
+  // Distinguishes a normal flip-card from a "Most Common" card, which is
+  // stored identically but displayed with a fill-in-the-blank reveal style
+  // instead of a flip animation. Defaults to 'flashcard' when absent.
+  cardType?: 'flashcard' | 'most_common';
   easeFactor?: number;
   interval?: number;
   repetitions?: number;
