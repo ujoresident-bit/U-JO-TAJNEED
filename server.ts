@@ -2786,6 +2786,7 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
       major: row.major || null,
       topic: row.topic || null,
       isCustom: row.is_custom ?? false,
+      cardType: row.card_type || 'flashcard',
       easeFactor: row.ease_factor ?? 2.5,
       interval: row.interval ?? 0,
       repetitions: row.repetitions ?? 0,
@@ -2820,11 +2821,24 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
       }
 
       // Query global flashcards (user_id IS NULL) OR user's personal flashcards (user_id = userRow.id)
-      const { data: rows, error } = await supabase
+      const cardTypeFilter = String(req.query.cardType || '').trim();
+      let flashcardsQuery = supabase
         .from('flashcards')
         .select('*')
         .or(`user_id.is.null,user_id.eq.${userRow.id}`)
         .order('created_at', { ascending: false });
+
+      if (cardTypeFilter === 'most_common') {
+        flashcardsQuery = flashcardsQuery.eq('card_type', 'most_common');
+      } else {
+        // Default view (plain Flashcards page): exclude Most Common cards
+        // so the two content types never mix in the same list, even for
+        // rows saved before card_type existed (NULL is treated as
+        // 'flashcard').
+        flashcardsQuery = flashcardsQuery.or('card_type.is.null,card_type.eq.flashcard');
+      }
+
+      const { data: rows, error } = await flashcardsQuery;
 
       if (error) {
         console.error("Error fetching flashcards from Supabase:", error.message);
@@ -2905,6 +2919,7 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
         major: cardData.major || null,
         topic: cardData.topic || null,
         is_custom: targetIsCustom,
+        card_type: cardData.cardType === 'most_common' ? 'most_common' : 'flashcard',
         ease_factor: cardData.easeFactor ?? 2.5,
         interval: cardData.interval ?? 0,
         repetitions: cardData.repetitions ?? 0,
