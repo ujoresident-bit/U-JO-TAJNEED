@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, ChevronLeft } from 'lucide-react';
+import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, Brain, ChevronLeft } from 'lucide-react';
 
 interface SpecialtyHubProps {
   bankId: string;
@@ -53,6 +53,14 @@ export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, o
       icon: Clapperboard,
       accent: 'purple',
       onClick: () => onNavigate('videos', { bankId })
+    },
+    {
+      key: 'smart_first_aid',
+      title: 'Smart First Aid Step1',
+      description: 'Read high-yield content by system, with an AI assistant grounded in the text.',
+      icon: Brain,
+      accent: 'cyan',
+      onClick: () => onNavigate('smart_first_aid', { bankId })
     }
   ];
 
