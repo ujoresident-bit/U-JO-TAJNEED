@@ -107,6 +107,7 @@ export default function App() {
 
         {/* Main View Container */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+          <div key={currentView} className="page-transition">
           {currentView === 'home' && <HomeView onNavigate={handleNavigate} />}
 
           {currentView === 'bank' && <QuestionBankView onNavigate={handleNavigate} bankId={viewParams.bankId} />}
@@ -141,6 +142,7 @@ export default function App() {
           {currentView === 'admin' && (
             <AdminDashboard onNavigate={handleNavigate} onRefreshData={handleRefreshData} />
           )}
+          </div>
         </main>
       </div>
     </ContentProtection>
