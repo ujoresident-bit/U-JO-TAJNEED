@@ -66,8 +66,8 @@ const generateShootingStars = (count: number) => {
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const [session, setSession] = useState(resolveSession());
   const user = session.user;
-  const farStars = useMemo(() => generateStars(70, 7, [0.3, 0.9]), []);
-  const nearStars = useMemo(() => generateStars(45, 31, [0.8, 1.8]), []);
+  const farStars = useMemo(() => generateStars(70, 7, [1.5, 3]), []);
+  const nearStars = useMemo(() => generateStars(45, 31, [2.5, 4.5]), []);
   const shootingStars = useMemo(() => generateShootingStars(3), []);
 
   const [mouse, setMouse] = useState({ x: 0.5, y: 0.5 });
@@ -162,10 +162,11 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       `}</style>
 
       {/* Cosmic backdrop, sized to this page's own content — absolute
-          instead of fixed, since fixed positioning breaks unexpectedly
-          when any ancestor has a transform/filter (common in app shells),
-          silently pinning it off-screen or behind other content. */}
-      <div className="absolute inset-0 -z-10 pointer-events-none overflow-hidden bg-black">
+          instead of fixed, so it paints between the app shell's own solid
+          background and the actual content, in normal DOM order, rather
+          than trying to sit "behind everything" where an opaque ancestor
+          background would just paint over it regardless of z-index. */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden bg-black">
         <div style={parallaxFar} className="absolute inset-0 transition-transform duration-300 ease-out">
           {farStars.map((star, i) => (
             <div
@@ -216,7 +217,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* Header */}
-      <div className="space-y-2 ujo-anim-item" style={{ animationDelay: '0ms' }}>
+      <div className="relative space-y-2 ujo-anim-item" style={{ animationDelay: '0ms' }}>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-slate-400 text-[10px] font-light uppercase tracking-[0.3em] pl-[calc(0.75rem+0.3em)]">
           <Stethoscope className="w-3.5 h-3.5" style={{ animation: 'ujo-breathe 3s ease-in-out infinite' }} />
           <span>U JO TAJNEED</span>
@@ -230,7 +231,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* Two fully independent bank cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="relative grid grid-cols-1 md:grid-cols-2 gap-5">
         {BANKS.map((bank, bankIdx) => {
           const sub = subByBank[bank.id as 'human_medicine' | 'dentistry'];
           const isActive = sub.status === 'ACTIVE';
@@ -331,7 +332,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* Shared quick-action cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div
           onClick={() => onNavigate('progress')}
           className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-purple-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
