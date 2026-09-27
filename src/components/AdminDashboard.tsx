@@ -20,7 +20,8 @@ import {
   Eye,
   Trash2,
   Clapperboard,
-  Sparkles
+  Sparkles,
+  Brain
 } from 'lucide-react';
 import {
   getDashboardMetrics,
@@ -58,6 +59,7 @@ import { AdminQuestionStats } from './AdminQuestionStats';
 import { AdminFlashcardsManager } from './AdminFlashcardsManager';
 import { AdminVideoManager } from './AdminVideoManager';
 import { AdminMostCommonManager } from './AdminMostCommonManager';
+import { AdminStudyContentManager } from './AdminStudyContentManager';
 
 interface AdminDashboardProps {
   onNavigate: (view: string) => void;
@@ -87,7 +89,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
       </div>
     );
   }
-  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'most_common' | 'videos' | 'config'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'most_common' | 'smart_first_aid' | 'videos' | 'config'>('overview');
   const [bankSubTab, setBankSubTab] = useState<'directory' | 'import' | 'stats'>('directory');
 
   // Metrics state (integrated with live Supabase telemetry)
@@ -332,6 +334,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
           { id: 'bank', label: 'Bank Inventory', icon: BookOpen },
           { id: 'flashcards', label: 'Flashcards', icon: Layers },
           { id: 'most_common', label: 'Most Common', icon: Sparkles },
+          { id: 'smart_first_aid', label: 'Smart First Aid', icon: Brain },
           { id: 'videos', label: 'Videos', icon: Clapperboard },
           { id: 'config', label: 'System Config', icon: Settings }
         ].map((tab) => {
@@ -744,6 +747,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
       {/* Tab 5: Flashcards */}
       {activeTab === 'flashcards' && <AdminFlashcardsManager />}
       {activeTab === 'most_common' && <AdminMostCommonManager />}
+      {activeTab === 'smart_first_aid' && <AdminStudyContentManager />}
       {activeTab === 'videos' && <AdminVideoManager />}
 
       {/* Tab 6: System Configuration */}
