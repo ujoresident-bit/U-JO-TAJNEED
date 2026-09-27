@@ -4781,6 +4781,282 @@ function isUserAccountActive(userRow: any): boolean {
     }
   });
 
+  // ============================================================
+  // SMART FIRST AID STEP1 — admin-authored study content, organized by
+  // System → Topic, exclusive to Human Medicine subscribers. Includes an
+  // AI assistant strictly grounded in each topic's own text (never general
+  // internet knowledge), and automatic linking to existing questions and
+  // flashcards that share the same topic/major.
+  // ============================================================
+
+  const requireAdminForStudyContent = (req: express.Request): boolean => {
+    const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || req.body?.telegramUserId || '') as string;
+    const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || req.body?.username || '') as string;
+    return verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+  };
+
+  // GET /api/study-topics — student-facing, gated by an active Human
+  // Medicine subscription (Smart First Aid is exclusive to that bank).
+  app.get("/api/study-topics", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const isAdminCaller = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+
+      if (!isAdminCaller) {
+        const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+        if (!userRow?.id) return res.status(403).json({ success: false, error: "Human Medicine subscription required." });
+        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine');
+        if (!subAuth.isSubscribed) {
+          return res.status(403).json({ success: false, error: "Smart First Aid Step1 requires an active Human Medicine subscription." });
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('study_topics')
+        .select('*')
+        .eq('bank_id', 'human_medicine')
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: true });
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+
+      // Attach the requesting user's read progress, if any.
+      let readTopicIds: string[] = [];
+      if (!isAdminCaller) {
+        const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+        if (userRow?.id) {
+          const { data: progressRows } = await supabase
+            .from('study_topic_progress')
+            .select('topic_id')
+            .eq('user_id', userRow.id);
+          readTopicIds = (progressRows || []).map((r: any) => r.topic_id);
+        }
+      }
+
+      return res.json({ success: true, topics: data || [], readTopicIds });
+    } catch (err: any) {
+      console.error("Error in GET /api/study-topics:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/study-topics/:id/mark-read — records that the requesting
+  // user has read this topic, for progress tracking.
+  app.post("/api/study-topics/:id/mark-read", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.status(400).json({ success: false, error: "Could not resolve user." });
+
+      const { error } = await supabase
+        .from('study_topic_progress')
+        .upsert({ user_id: userRow.id, topic_id: req.params.id, read_at: new Date().toISOString() }, { onConflict: 'user_id,topic_id' });
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-topics/:id/mark-read:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/study-topics/:id/related — pulls existing questions and
+  // flashcards that share this topic's title (matched against
+  // questions.topic / flashcards.topic, case-insensitively), so reading
+  // and practicing stay seamlessly connected without any manual linking.
+  app.get("/api/study-topics/:id/related", async (req, res) => {
+    try {
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data: topic } = await supabase.from('study_topics').select('topic_title').eq('id', req.params.id).maybeSingle();
+      if (!topic) return res.status(404).json({ success: false, error: "Topic not found." });
+
+      const [{ data: questions }, { data: flashcards }] = await Promise.all([
+        supabase.from('questions').select('id, question').ilike('topic', `%${topic.topic_title}%`).eq('bank_id', 'human_medicine').limit(10),
+        supabase.from('flashcards').select('custom_id, question').ilike('topic', `%${topic.topic_title}%`).limit(10)
+      ]);
+
+      return res.json({ success: true, questions: questions || [], flashcards: flashcards || [] });
+    } catch (err: any) {
+      console.error("Error in GET /api/study-topics/:id/related:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/study-topics/:id/ask — the "smart" assistant. Strictly
+  // grounded in this ONE topic's own stored text — the system instruction
+  // explicitly forbids answering from general knowledge, so it never
+  // silently substitutes outside material for the admin's own content.
+  app.post("/api/study-topics/:id/ask", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+      const question = String(req.body?.question || '').trim();
+      if (!question) return res.status(400).json({ success: false, error: "question is required." });
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const isAdminCaller = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+      if (!isAdminCaller) {
+        const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+        if (!userRow?.id) return res.status(403).json({ success: false, error: "Human Medicine subscription required." });
+        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine');
+        if (!subAuth.isSubscribed) return res.status(403).json({ success: false, error: "Active Human Medicine subscription required." });
+      }
+
+      const { data: topicRow, error: topicErr } = await supabase
+        .from('study_topics')
+        .select('topic_title, content, high_yield_facts')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      if (topicErr || !topicRow) return res.status(404).json({ success: false, error: "Topic not found." });
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) return res.status(500).json({ success: false, error: "GEMINI_API_KEY environment variable is not configured on the server." });
+
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+
+      const highYield = Array.isArray(topicRow.high_yield_facts) ? topicRow.high_yield_facts.join('\n- ') : '';
+      const SYSTEM_INSTRUCTION = `You are a focused study assistant for a single study topic titled "${topicRow.topic_title}".
+
+STRICT RULE: Answer using ONLY the topic text provided below. Do not use outside/general medical knowledge, and do not add facts that aren't present in this text. If the student's question cannot be answered from this text, say clearly that this topic's material doesn't cover that, and suggest what part of the text is closest to it instead.
+
+Keep answers concise, clear, and exam-oriented. You may quote short phrases from the text.
+
+--- TOPIC TEXT ---
+${topicRow.content}
+
+--- HIGH-YIELD FACTS ---
+- ${highYield}
+--- END OF TOPIC TEXT ---`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: question,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          safetySettings: MEDICAL_CONTENT_SAFETY_SETTINGS
+        }
+      });
+
+      const answerText = response.text || "I couldn't generate an answer — please try rephrasing your question.";
+      return res.json({ success: true, answer: answerText });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-topics/:id/ask:", err);
+      return res.status(500).json({ success: false, error: err.message || "Failed to get an answer." });
+    }
+  });
+
+  // ---- Admin CRUD ----
+  app.get("/api/admin/study-topics", async (req, res) => {
+    try {
+      if (!requireAdminForStudyContent(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data, error } = await supabase
+        .from('study_topics')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: true });
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, topics: data || [] });
+    } catch (err: any) {
+      console.error("Error in GET /api/admin/study-topics:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/admin/study-topics", async (req, res) => {
+    try {
+      if (!requireAdminForStudyContent(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      const { systemName, topicTitle, content, highYieldFacts, sortOrder } = req.body || {};
+      if (!systemName || !topicTitle || !content) {
+        return res.status(400).json({ success: false, error: "systemName, topicTitle, and content are required." });
+      }
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data, error } = await supabase
+        .from('study_topics')
+        .insert({
+          bank_id: 'human_medicine',
+          system_name: String(systemName).trim(),
+          topic_title: String(topicTitle).trim(),
+          content: String(content).trim(),
+          high_yield_facts: Array.isArray(highYieldFacts) ? highYieldFacts : [],
+          sort_order: Number(sortOrder) || 0
+        })
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, topic: data });
+    } catch (err: any) {
+      console.error("Error in POST /api/admin/study-topics:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put("/api/admin/study-topics/:id", async (req, res) => {
+    try {
+      if (!requireAdminForStudyContent(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      const { systemName, topicTitle, content, highYieldFacts, sortOrder } = req.body || {};
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (systemName !== undefined) updatePayload.system_name = String(systemName).trim();
+      if (topicTitle !== undefined) updatePayload.topic_title = String(topicTitle).trim();
+      if (content !== undefined) updatePayload.content = String(content).trim();
+      if (highYieldFacts !== undefined) updatePayload.high_yield_facts = Array.isArray(highYieldFacts) ? highYieldFacts : [];
+      if (sortOrder !== undefined) updatePayload.sort_order = Number(sortOrder) || 0;
+
+      const { data, error } = await supabase
+        .from('study_topics')
+        .update(updatePayload)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, topic: data });
+    } catch (err: any) {
+      console.error("Error in PUT /api/admin/study-topics/:id:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/study-topics/:id", async (req, res) => {
+    try {
+      if (!requireAdminForStudyContent(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { error } = await supabase.from('study_topics').delete().eq('id', req.params.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in DELETE /api/admin/study-topics/:id:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // GET /api/videos?bankId=human_medicine — student-facing list, gated by
   // an active subscription for that specific bank.
   app.get("/api/videos", async (req, res) => {
