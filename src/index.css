@@ -78,3 +78,20 @@ img {
   }
 }
 
+/* Page transition — a subtle fade + rise plays every time the current
+   view changes (App.tsx remounts this wrapper via key={currentView}).
+   Kept short and easing-out so it reads as responsive, not sluggish. */
+@keyframes ujo-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: ujo-page-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
