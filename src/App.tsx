@@ -15,6 +15,7 @@ import { MostCommonView } from './components/MostCommonView';
 import { VideosView } from './components/VideosView';
 import { QBankBasicView } from './components/QBankBasicView';
 import { SmartFirstAidView } from './components/SmartFirstAidView';
+import { CosmicBackground } from './components/CosmicBackground';
 import { initTelegramSdk } from './services/telegram';
 import { getCurrentUser, checkAccountActiveStatus } from './services/authService';
 import { syncQuestionsWithSupabase, syncBlocksFromSupabase } from './services/questionBankService';
@@ -98,6 +99,8 @@ export default function App() {
   return (
     <ContentProtection currentView={currentView}>
       <div key={refreshKey} className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
+        {currentView === 'home' && <CosmicBackground />}
+
         {/* Persistent App Shell Header */}
         <Header
           currentView={currentView}
