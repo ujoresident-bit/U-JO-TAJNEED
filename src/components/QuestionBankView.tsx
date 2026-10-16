@@ -45,7 +45,7 @@ interface QuestionBankViewProps {
   bankId?: string;
 }
 
-export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, bankId = 'human_medicine' }) => {
+export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, bankId = 'moh_bank' }) => {
   const canonicalUser = getCurrentUser();
   const [currentSession, setCurrentSession] = useState(() => resolveSession(canonicalUser.telegramId));
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
@@ -82,11 +82,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
           return;
         }
 
-        // 2. Authoritative API call to verify active subscription for
-        // THIS SPECIFIC BANK — Human Medicine and Dentistry each require
-        // their own separate subscription, so a user subscribed to one
-        // must never be treated as subscribed to the other.
-        const subObj = await syncSubscriptionFromSupabase(tgId, username, bankId);
+        // 2. Authoritative API call to verify active subscription
+        const subObj = await syncSubscriptionFromSupabase(tgId, username);
         const refreshedSession = resolveSession(tgId);
 
         const active = Boolean(
@@ -152,7 +149,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<QuestionStatusFilter>('ALL');
   const [selectedMajors, setSelectedMajors] = useState<string[]>(['All']);
   const [selectedTopics, setSelectedTopics] = useState<string[]>(['All']);
-  const [selectedYears, setSelectedYears] = useState<number[]>([]);
+  const [selectedYears, setSelectedYears] = useState<(number | string)[]>([]);
+  const [selectedExamType, setSelectedExamType] = useState<string | null>(null);
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [questionCount, setQuestionCount] = useState<number>(10);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -255,10 +253,11 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       majors: selectedMajors.includes('All') ? undefined : selectedMajors,
       topics: selectedTopics.includes('All') ? undefined : selectedTopics,
       years: selectedYears.length > 0 ? selectedYears : undefined,
+      examType: selectedExamType || undefined,
       difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
       bankId,
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty, bankId]
+    [selectedMajors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, bankId]
   );
 
   // Questions matching non-status criteria (used for card totals)
@@ -279,13 +278,14 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       topic: selectedTopics.length === 1 && selectedTopics[0] !== 'All' ? selectedTopics[0] : undefined,
       topics: selectedTopics.includes('All') ? undefined : selectedTopics,
       years: selectedYears.length > 0 ? selectedYears : undefined,
+      examType: selectedExamType || undefined,
       difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
       questionCount,
       statusFilter: selectedStatusFilter,
       userId: user.telegramId,
       bankId
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedDifficulty, questionCount, selectedStatusFilter, user.telegramId, bankId]
+    [selectedMajors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, questionCount, selectedStatusFilter, user.telegramId, bankId]
   );
 
   // Active question pool matching ALL filters (including status filter)
@@ -301,6 +301,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         majors: [m.name],
         topics: selectedTopics.includes('All') ? undefined : selectedTopics,
         years: selectedYears.length > 0 ? selectedYears : undefined,
+        examType: selectedExamType || undefined,
         difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
         statusFilter: selectedStatusFilter,
         userId: user.telegramId,
@@ -309,7 +310,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       counts[m.name] = count;
     });
     return counts;
-  }, [bankMeta.majors, selectedTopics, selectedYears, selectedDifficulty, selectedStatusFilter, user.telegramId, bankId]);
+  }, [bankMeta.majors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, selectedStatusFilter, user.telegramId, bankId]);
 
   // Compute dynamic Topic Question Counts respecting active Status, Major, Year, Difficulty filters
   const topicQuestionCounts = useMemo(() => {
@@ -319,6 +320,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         majors: selectedMajors.includes('All') ? undefined : selectedMajors,
         topics: [tName],
         years: selectedYears.length > 0 ? selectedYears : undefined,
+        examType: selectedExamType || undefined,
         difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
         statusFilter: selectedStatusFilter,
         userId: user.telegramId,
@@ -327,7 +329,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       counts[tName] = count;
     });
     return counts;
-  }, [availableTopics, selectedMajors, selectedYears, selectedDifficulty, selectedStatusFilter, user.telegramId]);
+  }, [availableTopics, selectedMajors, selectedYears, selectedExamType, selectedDifficulty, selectedStatusFilter, user.telegramId]);
 
   const toggleYear = (year: number | string) => {
     if (selectedYears.includes(year)) {
@@ -735,7 +737,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                 Checking Subscription Status...
               </h3>
               <p className="text-xs text-slate-400">
-                Verifying your U JO TAJNEED Pass with the subscription database...
+                Verifying your MOH Residency Pass with the subscription database...
               </p>
             </div>
           </div>
@@ -762,18 +764,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
               </h3>
               <p className="text-xs text-slate-400 max-w-lg">
                 {session.subscriptionStatus === 'EXPIRED'
-                  ? 'Your U JO TAJNEED Pass for this bank has expired. Please renew your subscription to resume creating and solving test blocks.'
-                  : 'You can configure filter criteria, but an active U JO TAJNEED Pass for this specific bank is required to start solving blocks.'}
+                  ? 'Your MOH Residency Pass has expired. Please renew your subscription to resume creating and solving test blocks.'
+                  : 'You can configure filter criteria, but an active MOH Residency Pass is required to start solving blocks.'}
               </p>
             </div>
           </div>
 
           <button
-            onClick={() => onNavigate('subscription', { bankId })}
+            onClick={() => onNavigate('subscription')}
             className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 shrink-0 cursor-pointer"
           >
             <CreditCard className="w-4 h-4" />
-            <span>{session.subscriptionStatus === 'EXPIRED' ? 'Renew Pass' : 'Subscribe to This Bank'}</span>
+            <span>{session.subscriptionStatus === 'EXPIRED' ? 'Renew MOH Pass' : 'Get MOH Pass'}</span>
           </button>
         </div>
       )}
@@ -883,7 +885,40 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             </div>
           </div>
 
-          {/* Exam Year Multi-Select */}
+          {/* Exam Type (TAJNEED / MADANI) — separate from the years list */}
+          {bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0 && (
+          <div className="glass-panel p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cyan-400" />
+                <span>Exam Type</span>
+              </label>
+              <span className="text-xs text-slate-400 font-medium">{selectedExamType || 'All Types'}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {bankMeta.examTypesAvailable.map((t) => {
+                const active = selectedExamType === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => { setSelectedExamType(active ? null : t); setSelectedYears([]); }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 cursor-pointer ${
+                      active
+                        ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/20'
+                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
+                    }`}
+                  >
+                    {active && <Check className="w-3 h-3 text-slate-950" />}
+                    <span>{t}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          )}
+
+          {/* Exam Year Multi-Select — years that belong to the chosen type */}
+          {bankId !== 'usmle_bank' && (
           <div className="glass-panel p-5 space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
@@ -891,12 +926,12 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                 <span>Exam Years (Multi-Select)</span>
               </label>
               <span className="text-xs text-slate-400 font-medium">
-                {selectedYears.length === 0 ? 'All Years (2015-2025)' : `${selectedYears.length} Selected`}
+                {selectedYears.length === 0 ? 'All Years' : `${selectedYears.length} Selected`}
               </span>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {bankMeta.yearsAvailable.map((yr) => {
+              {(selectedExamType && bankMeta.yearsByType ? bankMeta.yearsByType[selectedExamType] || [] : bankMeta.yearsAvailable).map((yr) => {
                 const isSelected = selectedYears.includes(yr);
                 return (
                   <button
@@ -913,8 +948,12 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                   </button>
                 );
               })}
+              {selectedExamType && bankMeta.yearsByType && (bankMeta.yearsByType[selectedExamType] || []).length === 0 && (
+                <span className="text-xs text-slate-500">No years yet under {selectedExamType}.</span>
+              )}
             </div>
           </div>
+          )}
 
           {/* Difficulty Filter */}
           <div className="glass-panel p-5 space-y-3">
@@ -1000,9 +1039,13 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                 <span className="font-semibold text-slate-200 truncate text-right">{selectedTopicsLabel}</span>
               </div>
               <div className="flex justify-between gap-2">
+                <span className="shrink-0">Type:</span>
+                <span className="font-semibold text-slate-200 text-right">{selectedExamType || 'All'}</span>
+              </div>
+              <div className="flex justify-between gap-2">
                 <span className="shrink-0">Years:</span>
                 <span className="font-semibold text-slate-200 truncate text-right">
-                  {selectedYears.length === 0 ? 'All (2015-2025)' : selectedYears.join(', ')}
+                  {selectedYears.length === 0 ? 'All' : selectedYears.join(', ')}
                 </span>
               </div>
               <div className="flex justify-between gap-2">
