@@ -202,6 +202,21 @@ const BANK_META_REGISTRY: Record<string, QuestionBankMeta> = {
   dentistry: USMLE_BANK_META
 };
 
+// Splits a stored year value such as "TAJNEED 2023" / "MADANI 2022" / 2019
+// into its exam type (TAJNEED | MADANI | undefined) and the year part.
+export const EXAM_TYPES = ['TAJNEED', 'MADANI'] as const;
+export const parseExamYear = (raw: number | string | undefined | null): { type?: string; year: number | string | '' } => {
+  if (typeof raw === 'number') return { year: raw };
+  const str = String(raw ?? '').trim();
+  const m = str.match(/^(TAJNEED|MADANI)\b\s*(.*)$/i);
+  if (m) {
+    const rest = m[2].trim();
+    return { type: m[1].toUpperCase(), year: rest === '' ? '' : (isNaN(Number(rest)) ? rest : Number(rest)) };
+  }
+  if (str !== '' && !isNaN(Number(str))) return { year: Number(str) };
+  return { year: str };
+};
+
 export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta => {
   const baseMeta = BANK_META_REGISTRY[bankId] || MOH_BANK_META;
   // ROOT CAUSE FIX: previously matched every question regardless of its
@@ -213,40 +228,36 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
 
   // Calculate dynamic meta counts from stored questions
   const totalQuestions = questions.length;
-  const yearsAvailable = Array.from(
-    new Set(
-      questions
-        .map((q) => q.year)
-        // QBANK_BASIC and MOST_COMMON are separate content pools reached
-        // via their own dedicated cards, not Past Years categories.
-        .filter((y) => y !== 'QBANK_BASIC' && y !== 'MOST_COMMON')
-    )
-  ).sort((a, b) => {
-    // Numeric years sort numerically and always come before non-numeric
-    // category labels (like 'TAJNEED'/'MADANI'), which sort alphabetically
-    // among themselves.
-    const aIsNum = typeof a === 'number';
-    const bIsNum = typeof b === 'number';
-    if (aIsNum && bIsNum) return (a as number) - (b as number);
-    if (aIsNum) return -1;
-    if (bIsNum) return 1;
-    return String(a).localeCompare(String(b));
+  const sortYears = (arr: (number | string)[]) =>
+    arr.sort((x, y) => {
+      const xn = typeof x === 'number';
+      const yn = typeof y === 'number';
+      if (xn && yn) return (x as number) - (y as number);
+      if (xn) return -1;
+      if (yn) return 1;
+      return String(x).localeCompare(String(y));
+    });
+  // TAJNEED / MADANI are an exam TYPE, not a year: each stored value like
+  // "TAJNEED 2023" is split into type + year. yearsAvailable holds only
+  // real years; yearsByType holds the years that exist under each type.
+  const yearSet = new Set<number | string>();
+  const byTypeSets: Record<string, Set<number | string>> = { TAJNEED: new Set(), MADANI: new Set() };
+  questions.forEach((q) => {
+    if (q.year === 'QBANK_BASIC' || q.year === 'MOST_COMMON') return;
+    const { type, year } = parseExamYear(q.year);
+    if (year === '') return;
+    yearSet.add(year);
+    if (type) byTypeSets[type].add(year);
   });
+  const yearsAvailable = sortYears(Array.from(yearSet));
   if (yearsAvailable.length === 0) {
     yearsAvailable.push(...baseMeta.yearsAvailable);
   }
-
-  // Always offer TAJNEED and MADANI as selectable categories for Human
-  // Medicine on the existing "Past Years" filter, using the exact same
-  // yearsAvailable mechanism — even before any questions are imported
-  // under them, so admins/students see them as ready-to-use categories.
-  if (bankId === 'human_medicine') {
-    for (const label of ['TAJNEED', 'MADANI']) {
-      if (!yearsAvailable.includes(label)) {
-        yearsAvailable.push(label);
-      }
-    }
-  }
+  const yearsByType: Record<string, (number | string)[]> = {
+    TAJNEED: sortYears(Array.from(byTypeSets.TAJNEED)),
+    MADANI: sortYears(Array.from(byTypeSets.MADANI))
+  };
+  const examTypesAvailable: string[] = bankId === 'human_medicine' ? [...EXAM_TYPES] : [];
 
   // Calculate dynamic majors & sub-topics breakdown from actual stored questions
   const majorMap: Record<string, { count: number; topics: Record<string, number> }> = {};
@@ -273,6 +284,8 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
     ...baseMeta,
     totalQuestions,
     yearsAvailable,
+    yearsByType,
+    examTypesAvailable,
     majors
   };
 };
@@ -354,8 +367,18 @@ export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
       if (qTopic !== filters.topic) return false;
     }
 
-    if (filters.years && filters.years.length > 0 && !filters.years.includes(q.year)) {
-      return false;
+    {
+      const parsed = parseExamYear(q.year);
+      if (filters.examType && parsed.type !== filters.examType) {
+        return false;
+      }
+      if (
+        filters.years &&
+        filters.years.length > 0 &&
+        !filters.years.some((y) => String(y) === String(parsed.year))
+      ) {
+        return false;
+      }
     }
     if (filters.difficulty && filters.difficulty !== 'All' && q.difficulty !== filters.difficulty) {
       return false;
