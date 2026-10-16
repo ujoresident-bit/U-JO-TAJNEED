@@ -102,6 +102,7 @@ export interface BlockFilters {
   majors?: string[];
   topics?: string[];
   years?: (number | string)[];
+  examType?: string; // 'TAJNEED' | 'MADANI' — exam type filter, separate from years
   difficulty?: string;
   questionCount?: number;
   statusFilter?: QuestionStatusFilter;
@@ -260,4 +261,6 @@ export interface QuestionBankMeta {
     topics: { name: string; questionCount: number }[];
   }[];
   yearsAvailable: (number | string)[];
+  yearsByType?: Record<string, (number | string)[]>;
+  examTypesAvailable?: string[];
 }
