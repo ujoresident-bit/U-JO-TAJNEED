@@ -99,7 +99,7 @@ export default function App() {
 
   return (
     <ContentProtection currentView={currentView}>
-      <div key={refreshKey} className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
+      <div key={refreshKey} className="min-h-screen bg-[#07090c] text-slate-100 font-sans antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
         {currentView === 'home' && <CosmicBackground />}
 
         {/* Persistent App Shell Header */}
@@ -110,7 +110,7 @@ export default function App() {
         />
 
         {/* Main View Container */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+        <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
           <div key={currentView} className="page-transition">
           {currentView === 'home' && <HomeView onNavigate={handleNavigate} />}
 
