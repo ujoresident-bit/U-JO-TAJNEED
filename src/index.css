@@ -1,16 +1,130 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>U JO TAJNEED</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Design tokens — one calm dark surface scale, one accent. */
+:root {
+  --bg: #07090c;
+  --surface: #0e1217;
+  --surface-2: #131920;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #e6eaf0;
+  --text-dim: #8b95a5;
+  --accent: #22d3ee;
+  --neon-cyan: #22d3ee;
+  --neon-purple: #8b5cf6;
+  --glass: rgba(255, 255, 255, 0.03);
+  --border: var(--line);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--bg);
+  background-image: radial-gradient(1200px 500px at 50% -10%, rgba(34, 211, 238, 0.06), transparent 60%);
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-feature-settings: 'cv11', 'ss01';
+  letter-spacing: -0.005em;
+}
+
+/* Primary surface used all over the app (cards, panels, forms). Solid and
+   quiet: no blur, no glow — hierarchy comes from spacing and contrast. */
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+}
+
+.ujo-card-hover {
+  transition: border-color 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+.ujo-card-hover:hover {
+  border-color: var(--line-strong);
+  background-color: var(--surface-2);
+  transform: translateY(-1px);
+}
+
+.neon-text {
+  color: var(--text);
+  text-shadow: none;
+}
+
+.neon-border {
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: none;
+}
+
+.neon-bg {
+  background: var(--accent);
+  color: #04202a;
+  box-shadow: none;
+}
+
+.stats-gradient {
+  background: var(--surface-2);
+}
+
+/* Content Protection Rules */
+.protected-content {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+/* Allow selection in form elements and inputs */
+input,
+textarea,
+select,
+[contenteditable="true"],
+.allow-select,
+.allow-select * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
+/* Disable image drag */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+.allow-drag-img img {
+  -webkit-user-drag: auto;
+  user-drag: auto;
+}
+
+/* Print protection stylesheet */
+@media print {
+  body {
+    display: none !important;
+  }
+}
+
+/* Page transition — a subtle fade + rise plays every time the current
+   view changes (App.tsx remounts this wrapper via key={currentView}).
+   Kept short and easing-out so it reads as responsive, not sluggish. */
+@keyframes ujo-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: ujo-page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
