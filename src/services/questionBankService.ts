@@ -176,7 +176,7 @@ export const saveImportBatchRecord = (batch: ImportBatch): void => {
   }
 };
 
-const getStoredBlocks = (): Record<string, Block> => {
+export const getStoredBlocks = (): Record<string, Block> => {
   if (typeof localStorage === 'undefined') return {};
   try {
     const raw = localStorage.getItem(BLOCKS_STORAGE_KEY);
