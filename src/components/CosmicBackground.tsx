@@ -63,7 +63,7 @@ export const CosmicBackground: React.FC = () => {
   const parallaxGlowB = { transform: `translate(${(mouse.x - 0.5) * -20}px, ${(mouse.y - 0.5) * -20}px)` };
 
   return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden bg-black">
+    <div className="fixed inset-0 pointer-events-none overflow-hidden bg-black" style={{ opacity: 0.5 }}>
       <style>{`
         @keyframes ujo-home-twinkle {
           0%, 100% { opacity: 0.1; }
