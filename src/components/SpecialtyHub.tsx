@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
+import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, Brain, ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
 import { fetchDueReviews } from '../services/reviewService';
-import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, Brain, ChevronLeft, Repeat } from 'lucide-react';
 
 interface SpecialtyHubProps {
   bankId: string;
@@ -8,123 +8,103 @@ interface SpecialtyHubProps {
   onNavigate: (view: string, params?: any) => void;
 }
 
-// Landing hub shown after choosing a specialty (currently Human Medicine),
-// before diving into any specific content type. Reuses existing pages
-// (Past Years → the existing question bank filter screen, Flashcards →
-// the existing flip-card view) and links to the two new content types
-// (Most Common, Videos) added alongside them.
+type Tint = 'cyan' | 'emerald' | 'amber' | 'violet';
+
+const TINTS: Record<Tint, string> = {
+  cyan: 'bg-cyan-400/10 text-cyan-300 border-cyan-400/20',
+  emerald: 'bg-emerald-400/10 text-emerald-300 border-emerald-400/20',
+  amber: 'bg-amber-400/10 text-amber-300 border-amber-400/20',
+  violet: 'bg-violet-400/10 text-violet-300 border-violet-400/20'
+};
+
+// Landing hub shown after choosing a specialty. Questions first, then
+// the study tools, then media and the book.
 export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, onNavigate }) => {
   const [dueCount, setDueCount] = useState<number | null>(null);
   useEffect(() => {
     fetchDueReviews(bankId).then((r) => setDueCount(r.due.length)).catch(() => {});
   }, [bankId]);
-  const cards = [
+
+  const groups: { title: string; items: { key: string; title: string; description: string; icon: any; tint: Tint; badge?: string; onClick: () => void }[] }[] = [
     {
-      key: 'past_years',
-      title: 'Past Years',
-      description: 'Practice by exam year, TAJNEED, or MADANI question sets.',
-      icon: BookOpen,
-      accent: 'cyan',
-      onClick: () => onNavigate('bank', { bankId })
+      title: 'Practice',
+      items: [
+        { key: 'past_years', title: 'Past Years', description: 'TAJNEED and MADANI sets, filtered by year.', icon: BookOpen, tint: 'cyan', onClick: () => onNavigate('bank', { bankId }) },
+        { key: 'qbank_basic', title: 'QBANK BASIC', description: 'Pharmacology, Microbiology, Immunology and Anatomy.', icon: GraduationCap, tint: 'emerald', onClick: () => onNavigate('qbank_basic', { bankId }) }
+      ]
     },
     {
-      key: 'qbank_basic',
-      title: 'QBANK BASIC',
-      description: 'Pharmacology, Microbiology, Immunology & Anatomy — no filters needed.',
-      icon: GraduationCap,
-      accent: 'emerald',
-      onClick: () => onNavigate('qbank_basic', { bankId })
+      title: 'Revise',
+      items: [
+        {
+          key: 'review', title: 'Review',
+          description: dueCount === null
+            ? 'Missed items return after 1, 3, then 7 days.'
+            : dueCount > 0 ? `${dueCount} item${dueCount === 1 ? '' : 's'} due today.` : 'Nothing due today.',
+          icon: Repeat, tint: 'amber',
+          badge: dueCount && dueCount > 0 ? String(dueCount) : undefined,
+          onClick: () => onNavigate('review', { bankId })
+        },
+        { key: 'flashcards', title: 'Flashcards', description: 'Flip through quick-recall cards.', icon: Layers, tint: 'cyan', onClick: () => onNavigate('flashcards', { bankId }) },
+        { key: 'most_common', title: 'Most Common', description: 'Fill-in-the-blank review of high-yield facts.', icon: Sparkles, tint: 'amber', onClick: () => onNavigate('most_common', { bankId }) }
+      ]
     },
     {
-      key: 'flashcards',
-      title: 'Flashcards',
-      description: 'Flip through quick-recall cards at your own pace.',
-      icon: Layers,
-      accent: 'cyan',
-      onClick: () => onNavigate('flashcards', { bankId })
-    },
-    {
-      key: 'most_common',
-      title: 'Most Common',
-      description: 'Fill-in-the-blank style review of the highest-yield facts.',
-      icon: Sparkles,
-      accent: 'amber',
-      onClick: () => onNavigate('most_common', { bankId })
-    },
-    {
-      key: 'videos',
-      title: 'Videos',
-      description: 'Browse the video library for this specialty.',
-      icon: Clapperboard,
-      accent: 'purple',
-      onClick: () => onNavigate('videos', { bankId })
-    },
-    {
-      key: 'review',
-      title: 'Review',
-      description: dueCount === null
-        ? 'Missed questions and cards come back automatically: 1 day, 3 days, then 7 days.'
-        : dueCount > 0
-          ? `${dueCount} item${dueCount === 1 ? '' : 's'} due for review today.`
-          : 'Nothing due today. Missed items return after 1, 3, then 7 days.',
-      icon: Repeat,
-      accent: 'emerald',
-      onClick: () => onNavigate('review', { bankId })
-    },
-    {
-      key: 'smart_first_aid',
-      title: 'Smart First Aid Step1',
-      description: 'Read high-yield content by system, with an AI assistant grounded in the text.',
-      icon: Brain,
-      accent: 'cyan',
-      onClick: () => onNavigate('smart_first_aid', { bankId })
+      title: 'Learn',
+      items: [
+        { key: 'smart_first_aid', title: 'Smart First Aid Step1', description: 'Read by part with quizzes, summaries, highlights and bookmarks.', icon: Brain, tint: 'violet', onClick: () => onNavigate('smart_first_aid', { bankId }) },
+        { key: 'videos', title: 'Videos', description: 'Browse the video library.', icon: Clapperboard, tint: 'violet', onClick: () => onNavigate('videos', { bankId }) }
+      ]
     }
   ];
 
-  const accentClasses: Record<string, { border: string; iconBg: string; iconText: string; glow: string }> = {
-    cyan: { border: 'border-cyan-500', iconBg: 'bg-cyan-500/10', iconText: 'text-cyan-400', glow: 'bg-cyan-500' },
-    emerald: { border: 'border-emerald-500', iconBg: 'bg-emerald-500/10', iconText: 'text-emerald-400', glow: 'bg-emerald-500' },
-    amber: { border: 'border-amber-500', iconBg: 'bg-amber-500/10', iconText: 'text-amber-400', glow: 'bg-amber-500' },
-    purple: { border: 'border-purple-500', iconBg: 'bg-purple-500/10', iconText: 'text-purple-400', glow: 'bg-purple-500' }
-  };
-
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-12">
-      <button
-        onClick={() => onNavigate('home')}
-        className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
-      >
-        <ChevronLeft className="w-4 h-4" />
-        <span>Back to Home</span>
-      </button>
-
-      <div className="space-y-1">
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-100">{bankLabel}</h1>
-        <p className="text-xs text-slate-400">Choose what you'd like to study.</p>
+    <div className="max-w-4xl mx-auto space-y-8 pb-16">
+      <div className="space-y-4">
+        <button
+          onClick={() => onNavigate('home')}
+          className="flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          <span>Home</span>
+        </button>
+        <div className="space-y-1.5">
+          <h1 className="text-3xl font-semibold tracking-tight text-white">{bankLabel}</h1>
+          <p className="text-sm text-slate-400">Pick what you want to study today.</p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-        {cards.map((card) => {
-          const accent = accentClasses[card.accent];
-          const Icon = card.icon;
-          return (
-            <button
-              key={card.key}
-              onClick={card.onClick}
-              className={`glass-panel relative overflow-hidden text-left p-6 border-t-4 ${accent.border} space-y-4 transition-all hover:-translate-y-0.5 active:scale-[0.98]`}
-            >
-              <div className={`absolute top-0 right-0 w-32 h-32 ${accent.glow} opacity-10 blur-[70px] -mr-10 -mt-10 pointer-events-none`} />
-              <div className={`w-12 h-12 rounded-xl ${accent.iconBg} ${accent.iconText} flex items-center justify-center`}>
-                <Icon className="w-6 h-6" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-100">{card.title}</h2>
-                <p className="text-xs text-slate-400 mt-1">{card.description}</p>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      {groups.map((g) => (
+        <section key={g.title} className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">{g.title}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {g.items.map((card) => {
+              const Icon = card.icon;
+              return (
+                <button
+                  key={card.key}
+                  onClick={card.onClick}
+                  className="glass-panel ujo-card-hover text-left p-5 flex items-center gap-4"
+                >
+                  <div className={`w-11 h-11 rounded-xl border flex items-center justify-center shrink-0 ${TINTS[card.tint]}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[15px] font-semibold text-slate-100">{card.title}</h3>
+                      {card.badge && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-amber-400 text-[#2a1d02] text-[10px] font-bold leading-none">{card.badge}</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{card.description}</p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-600 shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </div>
   );
 };
