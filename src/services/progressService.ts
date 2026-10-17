@@ -74,9 +74,11 @@ export const mergeSupabaseProgressWithLocal = async (userId: string): Promise<vo
   }
 };
 
-export const getUserStudyStats = (userId: string): UserStudyStats => {
-  const completedBlocks = getCompletedBlocksForUser(userId);
-  const activeBlock = getActiveBlockForUser(userId);
+export const getUserStudyStats = (userId: string, bankId?: string): UserStudyStats => {
+  // When a bank is given, stats are computed for that bank only so the
+  // two banks (Human Medicine / Dentistry) never mix.
+  const completedBlocks = getCompletedBlocksForUser(userId).filter((b) => !bankId || b.bankId === bankId);
+  const activeBlock = bankId ? getActiveBlockForUser(userId, bankId) : getActiveBlockForUser(userId);
 
   let totalQuestionsSolved = 0;
   let totalCorrect = 0;
