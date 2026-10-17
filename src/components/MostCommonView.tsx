@@ -39,7 +39,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
     return (
       <div className="max-w-2xl mx-auto space-y-6 pb-12 text-center">
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors mx-auto"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -58,7 +58,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
     <div className="max-w-2xl mx-auto space-y-6 pb-12">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
