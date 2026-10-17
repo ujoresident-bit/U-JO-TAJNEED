@@ -66,6 +66,15 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
     return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
   };
 
+  // A subscriber only sees the bank they are subscribed to — a Human
+  // Medicine subscriber never gets a Dentistry card and vice versa.
+  // Visitors with no active subscription (new, pending, expired) and
+  // admins see both banks so they can subscribe / manage.
+  const activeBankIds = BANKS.filter((b) => subByBank[b.id as 'human_medicine' | 'dentistry'].status === 'ACTIVE').map((b) => b.id);
+  const visibleBanks = session.isAdmin || activeBankIds.length === 0
+    ? BANKS
+    : BANKS.filter((b) => activeBankIds.includes(b.id));
+
   const firstName = user.firstName && user.firstName !== 'Resident' ? user.firstName : '';
 
   const quickLinks = [
@@ -89,15 +98,15 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       {/* Intro */}
       <div className="space-y-2 ujo-anim-item pt-2">
         <p className="text-xs font-medium text-cyan-300/90">{firstName ? `Welcome back, ${firstName}` : 'Welcome back'}</p>
-        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-white">Choose your exam bank</h1>
+        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-white">{visibleBanks.length === 1 ? 'Your exam bank' : 'Choose your exam bank'}</h1>
         <p className="text-sm text-slate-400 max-w-xl leading-relaxed">
-          Each bank has its own questions, progress and subscription.
+          {visibleBanks.length === 1 ? 'Everything you need for your exam, in one place.' : 'Each bank has its own questions, progress and subscription.'}
         </p>
       </div>
 
       {/* Bank cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {BANKS.map((bank, bankIdx) => {
+      <div className={`grid grid-cols-1 gap-5 ${visibleBanks.length > 1 ? 'md:grid-cols-2' : 'max-w-xl'}`}>
+        {visibleBanks.map((bank, bankIdx) => {
           const key = bank.id as 'human_medicine' | 'dentistry';
           const sub = subByBank[key];
           const isActive = sub.status === 'ACTIVE';
