@@ -53,7 +53,7 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-12">
       <button
-        onClick={() => onNavigate('specialty_hub', { bankId })}
+        onClick={() => onNavigate('back')}
         className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
       >
         <ChevronLeft className="w-4 h-4" />
