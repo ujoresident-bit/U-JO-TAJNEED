@@ -1,18 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import {
-  BookOpen,
+  ArrowRight,
   BarChart2,
   CreditCard,
   ShieldCheck,
   Play,
   CheckCircle2,
-  Stethoscope
+  Stethoscope,
+  Smile,
+  ChevronRight
 } from 'lucide-react';
 import { resolveSession } from '../services/authService';
 import { getSubscriptionStatus, syncSubscriptionFromSupabase } from '../services/subscriptionService';
 import { getUserStudyStats } from '../services/progressService';
 import { getActiveBlockForUser } from '../services/questionBankService';
-import { ECGLevelIndicator } from './ECGLevelIndicator';
 
 interface HomeViewProps {
   onNavigate: (view: string, params?: any) => void;
@@ -65,205 +66,162 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
     return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
   };
 
+  const firstName = user.firstName && user.firstName !== 'Resident' ? user.firstName : '';
+
+  const quickLinks = [
+    { key: 'progress', label: 'Performance', hint: 'Accuracy and progress by subject', icon: BarChart2, onClick: () => onNavigate('progress') },
+    { key: 'subscription', label: 'Subscriptions', hint: 'Plans, renewals and payment status', icon: CreditCard, onClick: () => onNavigate('subscription') },
+    session.isAdmin
+      ? { key: 'admin', label: 'Admin console', hint: 'Users, payments and content', icon: ShieldCheck, onClick: () => onNavigate('admin') }
+      : { key: 'done', label: 'Completed blocks', hint: 'Review finished question sets', icon: CheckCircle2, onClick: () => onNavigate('progress') }
+  ];
+
   return (
-    <div className="relative space-y-8 pb-12">
+    <div className="relative space-y-10 pb-16">
       <style>{`
         @keyframes ujo-fade-up {
-          from { opacity: 0; transform: translateY(14px); }
+          from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes ujo-shimmer {
-          0% { background-position: -200% center; }
-          100% { background-position: 200% center; }
-        }
-        @keyframes ujo-breathe {
-          0%, 100% { opacity: 0.5; transform: scale(1); }
-          50% { opacity: 0.9; transform: scale(1.06); }
-        }
-        .ujo-anim-item {
-          opacity: 0;
-          animation: ujo-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        .ujo-shimmer-text {
-          background: linear-gradient(90deg, #67e8f9 0%, #f0f9ff 25%, #67e8f9 50%, #fcd34d 75%, #67e8f9 100%);
-          background-size: 200% auto;
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
-          animation: ujo-shimmer 6s linear infinite;
-        }
+        .ujo-anim-item { opacity: 0; animation: ujo-fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
       `}</style>
 
-      {/* Header */}
-      <div className="relative space-y-2 ujo-anim-item" style={{ animationDelay: '0ms' }}>
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-slate-400 text-[10px] font-light uppercase tracking-[0.3em] pl-[calc(0.75rem+0.3em)]">
-          <Stethoscope className="w-3.5 h-3.5" style={{ animation: 'ujo-breathe 3s ease-in-out infinite' }} />
-          <span>U JO TAJNEED</span>
-        </div>
-        <h1 className="text-2xl sm:text-4xl font-thin text-slate-100 tracking-wide">
-          Medical Services Exam <span className="font-semibold ujo-shimmer-text">Prep Platform</span>
-        </h1>
-        <p className="text-xs text-slate-500 max-w-xl font-light tracking-wide">
-          Choose the bank you want to practice — each bank has a fully independent subscription.
+      {/* Intro */}
+      <div className="space-y-2 ujo-anim-item pt-2">
+        <p className="text-xs font-medium text-cyan-300/90">{firstName ? `Welcome back, ${firstName}` : 'Welcome back'}</p>
+        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-white">Choose your exam bank</h1>
+        <p className="text-sm text-slate-400 max-w-xl leading-relaxed">
+          Each bank has its own questions, progress and subscription.
         </p>
       </div>
 
-      {/* Two fully independent bank cards */}
-      <div className="relative grid grid-cols-1 md:grid-cols-2 gap-5">
+      {/* Bank cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {BANKS.map((bank, bankIdx) => {
-          const sub = subByBank[bank.id as 'human_medicine' | 'dentistry'];
+          const key = bank.id as 'human_medicine' | 'dentistry';
+          const sub = subByBank[key];
           const isActive = sub.status === 'ACTIVE';
-          const activeBlock = activeBlockByBank[bank.id as 'human_medicine' | 'dentistry'];
-          const stats = statsByBank[bank.id as 'human_medicine' | 'dentistry'];
-          const accent = bank.color === 'amber' ? 'amber' : 'cyan';
+          const canEnter = isActive || session.isAdmin;
+          const activeBlock = activeBlockByBank[key];
+          const stats = statsByBank[key];
+          const isAmber = bank.color === 'amber';
+          const tint = isAmber
+            ? { icon: 'bg-amber-400/10 text-amber-300 border-amber-400/25', btn: 'bg-amber-400 hover:bg-amber-300 text-[#2a1d02]', bar: 'bg-amber-400' }
+            : { icon: 'bg-cyan-400/10 text-cyan-300 border-cyan-400/25', btn: 'bg-cyan-400 hover:bg-cyan-300 text-[#04202a]', bar: 'bg-cyan-400' };
+          const Icon = isAmber ? Smile : Stethoscope;
+          const statusLabel = session.isAdmin ? 'Admin' : isActive ? 'Active' : sub.status === 'PENDING' ? 'Pending' : sub.status === 'EXPIRED' ? 'Expired' : 'Not subscribed';
+          const statusStyle = session.isAdmin || isActive
+            ? 'text-emerald-300 bg-emerald-400/10 border-emerald-400/25'
+            : sub.status === 'PENDING'
+            ? 'text-amber-300 bg-amber-400/10 border-amber-400/25'
+            : 'text-slate-400 bg-white/[0.04] border-white/10';
 
           return (
             <div
               key={bank.id}
-              className="ujo-anim-item relative overflow-hidden p-6 space-y-4 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-white/25 hover:-translate-y-1 transition-all duration-300 group"
-              style={{ animationDelay: `${120 + bankIdx * 110}ms` }}
+              className="ujo-anim-item glass-panel p-6 flex flex-col gap-5"
+              style={{ animationDelay: `${80 + bankIdx * 90}ms` }}
             >
-              <div className={`absolute top-0 right-0 w-40 h-40 ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} opacity-[0.07] group-hover:opacity-[0.12] blur-[80px] -mr-16 -mt-16 pointer-events-none transition-opacity duration-300`} />
-              <div className={`absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent ${accent === 'amber' ? 'via-amber-500/50' : 'via-cyan-500/50'} to-transparent`} />
-
               <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-xl font-light text-slate-100 tracking-wide">{bank.name}</h2>
-                  <p className="text-[10px] text-slate-500 uppercase tracking-[0.2em] mt-0.5">{bank.shortName}</p>
+                <div className="flex items-center gap-3.5">
+                  <div className={`w-11 h-11 rounded-xl border flex items-center justify-center ${tint.icon}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-white tracking-tight">{bank.name}</h2>
+                    <p className="text-xs text-slate-500">{isAmber ? '20 JOD · 3 months' : '15 JOD · 3 months'}</p>
+                  </div>
                 </div>
-                <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase border shrink-0 tracking-wider ${
-                  isActive
-                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                    : sub.status === 'PENDING'
-                    ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                    : 'bg-rose-500/10 text-rose-300 border-rose-500/30'
-                }`}>
-                  {session.isAdmin ? 'ADMIN' : sub.status}
-                </span>
+                <span className={`px-2.5 py-1 rounded-md text-[11px] font-medium border shrink-0 ${statusStyle}`}>{statusLabel}</span>
               </div>
 
-              {!isActive && !session.isAdmin && (
-                <p className="text-xs text-slate-500 font-light">
+              {canEnter ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
+                    <p className="text-[11px] text-slate-500">Accuracy</p>
+                    <p className="text-xl font-semibold text-white tabular-nums mt-0.5">{Math.round(stats.accuracyPercentage || 0)}%</p>
+                    <div className="h-1 rounded-full bg-white/[0.06] mt-2 overflow-hidden">
+                      <div className={`h-full ${tint.bar}`} style={{ width: `${Math.min(100, Math.round(stats.accuracyPercentage || 0))}%` }} />
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-white/[0.03] border border-white/[0.06] px-4 py-3">
+                    <p className="text-[11px] text-slate-500">Questions solved</p>
+                    <p className="text-xl font-semibold text-white tabular-nums mt-0.5">{stats.totalQuestionsSolved || 0}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-400 leading-relaxed">
                   {sub.status === 'PENDING'
-                    ? 'Your payment request is under admin review.'
+                    ? 'Your payment is being reviewed. You will get a Telegram message as soon as it is approved.'
                     : sub.status === 'EXPIRED'
-                    ? 'Your subscription has expired — renew to continue practicing.'
-                    : 'Subscribe to this bank to access the full question bank.'}
+                    ? 'Your subscription has expired. Renew to keep practicing.'
+                    : 'Subscribe to unlock the full question bank, flashcards and study tools.'}
                 </p>
               )}
 
-              {(isActive || session.isAdmin) && activeBlock && (
-                <div className="p-3 rounded-xl bg-white/[0.03] border border-white/5 flex items-center justify-between">
+              {canEnter && activeBlock && (
+                <button
+                  onClick={() => onNavigate('question_screen', { blockId: activeBlock.id })}
+                  className="w-full flex items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.05] px-4 py-3 text-left transition-colors"
+                >
                   <div>
-                    <p className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider">Active Session</p>
-                    <p className="text-xs font-medium text-slate-300">
+                    <p className="text-[11px] text-slate-500">Continue where you left off</p>
+                    <p className="text-sm font-medium text-slate-200">
                       Question {activeBlock.currentIndex + 1} of {activeBlock.questionIds.length}
                     </p>
                   </div>
-                  <button
-                    onClick={() => onNavigate('question_screen', { blockId: activeBlock.id })}
-                    className={`px-4 py-2 rounded-lg ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} text-slate-950 text-[11px] font-bold uppercase flex items-center gap-1.5 hover:scale-105 transition-transform`}
-                  >
-                    <Play className="w-3 h-3 fill-slate-950" />
-                    <span>Continue</span>
-                  </button>
-                </div>
+                  <Play className="w-4 h-4 text-slate-300 shrink-0" />
+                </button>
               )}
 
-              {(isActive || session.isAdmin) && (
-                <ECGLevelIndicator
-                  label={bank.shortName}
-                  accuracyPercentage={stats.accuracyPercentage}
-                  questionsSolved={stats.totalQuestionsSolved}
-                  colorTheme={accent}
-                />
-              )}
-
-              <div className="flex gap-2">
-                {isActive || session.isAdmin ? (
+              <div className="mt-auto space-y-2">
+                {canEnter ? (
                   <button
                     onClick={() => onNavigate(bank.id === 'human_medicine' ? 'specialty_hub' : 'bank', { bankId: bank.id })}
-                    className={`flex-1 py-3 rounded-xl ${accent === 'amber' ? 'bg-amber-500' : 'bg-cyan-500'} text-slate-950 font-semibold uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95 hover:brightness-110`}
+                    className={`w-full py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors ${tint.btn}`}
                   >
-                    <BookOpen className="w-4 h-4" />
-                    <span>Start New Test</span>
+                    <span>Open {bank.name}</span>
+                    <ArrowRight className="w-4 h-4" />
                   </button>
                 ) : (
                   <button
                     onClick={() => onNavigate('subscription', { bankId: bank.id })}
-                    className="flex-1 py-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 text-slate-200 font-semibold uppercase tracking-wider text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+                    className="w-full py-3 rounded-xl border border-white/[0.12] hover:bg-white/[0.05] text-slate-100 font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
                   >
                     <CreditCard className="w-4 h-4" />
-                    <span>{sub.status === 'EXPIRED' ? 'Renew Subscription' : 'Subscribe Now'}</span>
+                    <span>{sub.status === 'EXPIRED' ? 'Renew subscription' : 'Subscribe'}</span>
                   </button>
                 )}
+                {isActive && (
+                  <p className="text-[11px] text-slate-500 text-center">Expires in {getDaysRemaining(bank.id)} days</p>
+                )}
               </div>
-
-              {isActive && (
-                <p className="text-[10px] text-slate-600 text-center font-light tracking-wide">
-                  Subscription expires in {getDaysRemaining(bank.id)} days
-                </p>
-              )}
             </div>
           );
         })}
       </div>
 
-      {/* Shared quick-action cards */}
-      <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div
-          onClick={() => onNavigate('progress')}
-          className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-purple-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
-          style={{ animationDelay: '340ms' }}
-        >
-          <div className="p-3 rounded-xl bg-purple-500/10 text-purple-400 group-hover:scale-110 transition-transform">
-            <BarChart2 className="w-6 h-6" />
-          </div>
-          <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 group-hover:text-purple-300 transition-colors">
-            Performance
-          </p>
-        </div>
-
-        <div
-          onClick={() => onNavigate('subscription')}
-          className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-amber-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
-          style={{ animationDelay: '420ms' }}
-        >
-          <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 group-hover:scale-110 transition-transform">
-            <CreditCard className="w-6 h-6" />
-          </div>
-          <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 group-hover:text-amber-300 transition-colors">
-            Subscriptions
-          </p>
-        </div>
-
-        {session.isAdmin ? (
-          <div
-            onClick={() => onNavigate('admin')}
-            className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-cyan-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
-            style={{ animationDelay: '500ms' }}
-          >
-            <div className="p-3 rounded-xl bg-white/5 text-slate-300 group-hover:scale-110 transition-transform">
-              <ShieldCheck className="w-6 h-6 text-cyan-400" />
-            </div>
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 group-hover:text-cyan-300 transition-colors">
-              Admin Console
-            </p>
-          </div>
-        ) : (
-          <div
-            onClick={() => onNavigate('progress')}
-            className="ujo-anim-item relative overflow-hidden p-6 rounded-2xl bg-white/[0.02] backdrop-blur-xl border border-white/10 hover:border-emerald-500/30 hover:-translate-y-1 flex flex-col items-center justify-center gap-3 text-center group cursor-pointer transition-all duration-300"
-            style={{ animationDelay: '500ms' }}
-          >
-            <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 group-hover:scale-110 transition-transform">
-              <CheckCircle2 className="w-6 h-6" />
-            </div>
-            <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-300 group-hover:text-emerald-300 transition-colors">
-              Completed Blocks
-            </p>
-          </div>
-        )}
+      {/* Shortcuts */}
+      <div className="ujo-anim-item glass-panel divide-y divide-white/[0.06] overflow-hidden" style={{ animationDelay: '260ms' }}>
+        {quickLinks.map((l) => {
+          const LIcon = l.icon;
+          return (
+            <button
+              key={l.key}
+              onClick={l.onClick}
+              className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-white/[0.03] transition-colors"
+            >
+              <div className="w-9 h-9 rounded-lg bg-white/[0.05] flex items-center justify-center text-slate-300 shrink-0">
+                <LIcon className="w-[18px] h-[18px]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-100">{l.label}</p>
+                <p className="text-xs text-slate-500 truncate">{l.hint}</p>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-600 shrink-0" />
+            </button>
+          );
+        })}
       </div>
     </div>
   );
