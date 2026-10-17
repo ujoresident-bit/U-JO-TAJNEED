@@ -211,7 +211,7 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
   // End Block Handlers
   const handleSaveAndExit = () => {
     endBlock(block.id, 'save');
-    onNavigate('home');
+    onNavigate('back');
   };
 
   const handleFinishBlock = () => {
