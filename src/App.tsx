@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Header } from './components/Header';
 import { HomeView } from './components/HomeView';
@@ -51,11 +51,64 @@ export default function App() {
     syncFlashcardsFromSupabase().catch(() => {});
   }, []);
 
-  const handleNavigate = (view: string, params: any = {}) => {
+  // Navigation history so every "Back" returns to the previous page.
+  const historyRef = useRef<{ view: string; params: any }[]>([]);
+  const currentRef = useRef<{ view: string; params: any }>({ view: 'home', params: {} });
+
+  const goTo = (view: string, params: any) => {
+    currentRef.current = { view, params };
     setCurrentView(view);
     setViewParams(params);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  const handleNavigate = (view: string, params: any = {}) => {
+    if (view === 'back') {
+      // Skip finished/in-progress question screens when going back.
+      let prev = historyRef.current.pop();
+      while (prev && prev.view === 'question_screen') prev = historyRef.current.pop();
+      goTo(prev ? prev.view : 'home', prev ? prev.params : {});
+      return;
+    }
+    const cur = currentRef.current;
+    if (view === 'home') {
+      historyRef.current = [];
+    } else if (cur.view !== view || JSON.stringify(cur.params) !== JSON.stringify(params)) {
+      historyRef.current.push(cur);
+      if (historyRef.current.length > 50) historyRef.current.shift();
+    }
+    goTo(view, params);
+    try { window.history.pushState({ ujo: true }, ''); } catch {}
+  };
+
+  // Phone/browser back button and Telegram's native back button.
+  useEffect(() => {
+    try { window.history.replaceState({ ujo: true }, ''); window.history.pushState({ ujo: true }, ''); } catch {}
+    const onPop = () => {
+      if (currentRef.current.view === 'home' && historyRef.current.length === 0) {
+        try { window.history.pushState({ ujo: true }, ''); } catch {}
+        return;
+      }
+      handleNavigate('back');
+      try { window.history.pushState({ ujo: true }, ''); } catch {}
+    };
+    window.addEventListener('popstate', onPop);
+    const wa: any = (window as any).Telegram?.WebApp;
+    const onTgBack = () => handleNavigate('back');
+    try { wa?.BackButton?.onClick?.(onTgBack); } catch {}
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      try { wa?.BackButton?.offClick?.(onTgBack); } catch {}
+    };
+  }, []);
+
+  useEffect(() => {
+    const wa: any = (window as any).Telegram?.WebApp;
+    try {
+      if (currentView === 'home') wa?.BackButton?.hide?.();
+      else wa?.BackButton?.show?.();
+    } catch {}
+  }, [currentView]);
 
   const handleRefreshData = () => {
     setRefreshKey((prev) => prev + 1);
