@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { getFlashcards, syncFlashcardsFromSupabase } from '../services/flashcardService';
 import { Flashcard } from '../types';
+import { recordReview } from '../services/reviewService';
 
 interface FlashcardsViewProps {
   onNavigate: (view: string) => void;
@@ -151,6 +152,24 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
               </div>
             </div>
           </div>
+
+          {/* Spaced-repetition self-check: missed cards return after 1 day, 3 days, 7 days */}
+          {isFlipped && (
+            <div className="grid grid-cols-2 gap-3 w-full max-w-2xl">
+              <button
+                onClick={() => { recordReview('flashcard', currentCard.id, false); handleNext(); }}
+                className="py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs font-bold cursor-pointer"
+              >
+                Missed it — review later
+              </button>
+              <button
+                onClick={() => { recordReview('flashcard', currentCard.id, true); handleNext(); }}
+                className="py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-200 text-xs font-bold cursor-pointer"
+              >
+                Got it
+              </button>
+            </div>
+          )}
 
           {/* Navigation Bar */}
           <div className="flex items-center gap-3 w-full max-w-2xl justify-between pt-2">
