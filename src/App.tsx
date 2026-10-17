@@ -14,6 +14,7 @@ import { SpecialtyHub } from './components/SpecialtyHub';
 import { MostCommonView } from './components/MostCommonView';
 import { VideosView } from './components/VideosView';
 import { QBankBasicView } from './components/QBankBasicView';
+import { ReviewView } from './components/ReviewView';
 import { SmartFirstAidView } from './components/SmartFirstAidView';
 import { CosmicBackground } from './components/CosmicBackground';
 import { initTelegramSdk } from './services/telegram';
@@ -125,6 +126,7 @@ export default function App() {
           {currentView === 'videos' && <VideosView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
           {currentView === 'qbank_basic' && <QBankBasicView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
           {currentView === 'smart_first_aid' && <SmartFirstAidView onNavigate={handleNavigate} />}
+          {currentView === 'review' && <ReviewView bankId={viewParams.bankId || 'human_medicine'} onNavigate={handleNavigate} />}
 
           {currentView === 'question_screen' && (
             <QuestionScreen
