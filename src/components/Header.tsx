@@ -1,9 +1,5 @@
 import React from 'react';
-import {
-  Stethoscope,
-  ShieldCheck,
-  User
-} from 'lucide-react';
+import { Stethoscope, ShieldCheck, User } from 'lucide-react';
 import { resolveSession } from '../services/authService';
 
 interface HeaderProps {
@@ -16,80 +12,53 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
   const session = resolveSession();
   const user = session.user;
 
+  const status =
+    session.isAdmin ? { label: 'Admin', dot: 'bg-cyan-400' }
+    : session.subscriptionStatus === 'ACTIVE' ? { label: 'Active', dot: 'bg-emerald-400' }
+    : session.subscriptionStatus === 'EXPIRED' ? { label: 'Expired', dot: 'bg-rose-400' }
+    : session.subscriptionStatus === 'PENDING' ? { label: 'Pending', dot: 'bg-amber-400' }
+    : { label: 'Not subscribed', dot: 'bg-slate-500' };
+
   return (
-    <header className="sticky top-0 z-40 bg-[#050506]/80 backdrop-blur-md border-b border-white/10 px-4 py-3">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-        {/* Brand & Logo */}
-        <button
-          onClick={() => onNavigate('home')}
-          className="flex items-center gap-3 text-left focus:outline-none group"
-        >
-          <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:neon-border transition-all">
-            <Stethoscope className="w-5 h-5 text-[#00F2FF]" />
+    <header className="sticky top-0 z-40 bg-[#07090c]/85 backdrop-blur-md border-b border-white/[0.06]">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-3">
+        <button onClick={() => onNavigate('home')} className="flex items-center gap-2.5 focus:outline-none group">
+          <div className="w-8 h-8 rounded-lg bg-cyan-400/10 border border-cyan-400/25 flex items-center justify-center">
+            <Stethoscope className="w-4 h-4 text-cyan-300" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-bold text-lg tracking-tight uppercase neon-text group-hover:opacity-90 transition-opacity">
-                U JO TAJNEED
-              </span>
-            </div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
-              Medical Services Platform
-            </p>
-          </div>
+          <span className="text-[15px] font-semibold tracking-tight text-slate-100 group-hover:text-white transition-colors">
+            U JO <span className="text-cyan-300">TAJNEED</span>
+          </span>
         </button>
 
-        {/* Right Action Bar */}
-        <div className="flex items-center gap-3">
-          {/* Active Subscriber Pill */}
+        <div className="flex items-center gap-2">
           <button
             onClick={() => onNavigate('subscription')}
-            className="hidden sm:flex items-center gap-2.5 bg-white/5 border border-white/10 px-3.5 py-1.5 rounded-full hover:bg-white/10 transition-all"
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 border border-white/[0.08] hover:bg-white/[0.04] transition-colors"
           >
-            <div className={`w-2 h-2 rounded-full ${
-              session.subscriptionStatus === 'ACTIVE'
-                ? 'bg-emerald-400 animate-pulse'
-                : session.subscriptionStatus === 'PENDING'
-                ? 'bg-amber-400'
-                : 'bg-rose-400'
-            }`} />
-            <span className="text-xs font-medium uppercase tracking-wider text-slate-300">
-              {session.isAdmin
-                ? 'Admin Pass'
-                : session.subscriptionStatus === 'ACTIVE'
-                ? 'Active Subscriber'
-                : session.subscriptionStatus === 'EXPIRED'
-                ? 'Pass Expired'
-                : session.subscriptionStatus === 'PENDING'
-                ? 'Pending Review'
-                : 'Unsubscribed'}
-            </span>
+            <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+            {status.label}
           </button>
 
-          {/* Admin Link if Admin Allowlist */}
           {session.isAdmin && (
             <button
               onClick={() => onNavigate('admin')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                 currentView === 'admin'
-                  ? 'bg-cyan-500/20 text-cyan-300 border-[#00F2FF] shadow-sm shadow-cyan-500/20'
-                  : 'glass-panel text-slate-300 hover:text-slate-100'
+                  ? 'bg-cyan-400/10 text-cyan-200 border-cyan-400/40'
+                  : 'text-slate-300 border-white/[0.08] hover:bg-white/[0.04]'
               }`}
             >
-              <ShieldCheck className="w-4 h-4 text-[#00F2FF]" />
+              <ShieldCheck className="w-4 h-4" />
               <span className="hidden md:inline">Admin</span>
             </button>
           )}
 
-          {/* User Profile Info */}
-          <div className="flex items-center gap-3">
-            <div className="text-right hidden md:block">
-              <p className="text-xs font-bold text-slate-200">
-                {user.firstName ? `${user.firstName} ${user.lastName}` : 'User'}
-              </p>
-              <p className="text-[10px] text-slate-500">Trainee</p>
-            </div>
-            <div className="w-9 h-9 rounded-full border-2 border-slate-700 bg-slate-800 flex items-center justify-center overflow-hidden">
+          <div className="flex items-center gap-2.5 pl-1">
+            <p className="hidden md:block text-xs font-medium text-slate-300">
+              {user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'User'}
+            </p>
+            <div className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/[0.08] flex items-center justify-center">
               <User className="w-4 h-4 text-slate-300" />
             </div>
           </div>
