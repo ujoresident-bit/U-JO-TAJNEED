@@ -55,11 +55,11 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
       {/* Top Header */}
       <div className="flex items-center justify-between">
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400 hover:text-slate-100 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Back to Home</span>
+          <span>Back</span>
         </button>
 
         {flashcards.length > 0 && (
