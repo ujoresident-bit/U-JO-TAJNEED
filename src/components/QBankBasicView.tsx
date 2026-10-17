@@ -60,7 +60,7 @@ export const QBankBasicView: React.FC<QBankBasicViewProps> = ({ bankId, onNaviga
   return (
     <div className="max-w-3xl mx-auto space-y-6 pb-12">
       <button
-        onClick={() => onNavigate('specialty_hub', { bankId })}
+        onClick={() => onNavigate('back')}
         className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-slate-200 transition-colors"
       >
         <ChevronLeft className="w-4 h-4" />
