@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { recordReview } from '../services/reviewService';
 import {
   ArrowLeft,
   Layers,
@@ -164,6 +165,8 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
     if (isAnswered) return; // Locked once answered
     const updatedBlock = saveAnswer(block.id, qId, optionKey);
     setBlock({ ...updatedBlock });
+    // Spaced repetition: wrong answers get scheduled for review.
+    recordReview('question', qId, optionKey === currentQuestion.correctAnswer, currentQuestion.bankId || 'human_medicine');
   };
 
   // Navigation handlers
