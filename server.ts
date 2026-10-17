@@ -4958,15 +4958,19 @@ function isUserAccountActive(userRow: any): boolean {
       if (error) return res.status(500).json({ success: false, error: error.message });
 
       let progressByPart: Record<string, number> = {};
+      let quizByPart: Record<string, { score: number; total: number }> = {};
       if (userRow?.id) {
         const { data: progressRows } = await supabase
           .from('study_book_progress')
-          .select('part_id, last_page')
+          .select('part_id, last_page, quiz_best_score, quiz_total')
           .eq('user_id', userRow.id);
-        (progressRows || []).forEach((r: any) => { progressByPart[r.part_id] = r.last_page; });
+        (progressRows || []).forEach((r: any) => {
+          progressByPart[r.part_id] = r.last_page;
+          if (r.quiz_total) quizByPart[r.part_id] = { score: r.quiz_best_score || 0, total: r.quiz_total };
+        });
       }
 
-      return res.json({ success: true, parts: parts || [], progressByPart });
+      return res.json({ success: true, parts: parts || [], progressByPart, quizByPart });
     } catch (err: any) {
       console.error("Error in GET /api/study-book:", err);
       return res.status(500).json({ success: false, error: err.message });
@@ -5018,6 +5022,8 @@ function isUserAccountActive(userRow: any): boolean {
         if (!userRow?.id) return res.status(403).json({ success: false, error: "Human Medicine subscription required." });
         const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine');
         if (!subAuth.isSubscribed) return res.status(403).json({ success: false, error: "Active Human Medicine subscription required." });
+        const aiQuota = consumeAiQuota(String(userRow.id));
+        if (!aiQuota.ok) return res.status(429).json({ success: false, error: "Daily AI limit reached. Please come back tomorrow." });
       }
 
       const { data: part, error: partErr } = await supabase
@@ -5069,6 +5075,407 @@ ${contextText}
     } catch (err: any) {
       console.error("Error in POST /api/study-book/:id/ask:", err);
       return res.status(500).json({ success: false, error: err.message || "Failed to get an answer." });
+    }
+  });
+
+  // ======================================================================
+  // STUDY FEATURES: shared helpers (AI daily quota, auth, Gemini wrapper)
+  // ======================================================================
+  const aiDailyUsage = new Map<string, number>();
+  const AI_DAILY_LIMIT = Number(process.env.AI_DAILY_LIMIT_PER_USER || 40);
+
+  // Per-user daily cap on AI calls (assistant, quiz, summary). Admins are
+  // exempt. In-memory on purpose: it only needs to protect the Gemini
+  // quota, and a restart simply resets the counters.
+  function consumeAiQuota(userKey: string): { ok: boolean; remaining: number } {
+    const day = new Date().toISOString().slice(0, 10);
+    const key = `${day}:${userKey}`;
+    const used = aiDailyUsage.get(key) || 0;
+    if (used >= AI_DAILY_LIMIT) return { ok: false, remaining: 0 };
+    aiDailyUsage.set(key, used + 1);
+    if (aiDailyUsage.size > 20000) {
+      for (const k of Array.from(aiDailyUsage.keys())) if (!k.startsWith(day)) aiDailyUsage.delete(k);
+    }
+    return { ok: true, remaining: AI_DAILY_LIMIT - used - 1 };
+  }
+
+  // Resolves the caller and enforces an active Human Medicine subscription
+  // (admins pass). Sends the error response itself and returns null on fail.
+  async function authorizeHumanMedicine(req: any, res: any): Promise<{ userRow: any; isAdmin: boolean } | null> {
+    const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || req.query?.telegramUserId || '') as string;
+    const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || req.query?.username || '') as string;
+    const isAdmin = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+    const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+    if (!userRow?.id) {
+      res.status(403).json({ success: false, error: "Human Medicine subscription required." });
+      return null;
+    }
+    if (!isAdmin) {
+      const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, 'human_medicine');
+      if (!subAuth.isSubscribed) {
+        res.status(403).json({ success: false, error: "Active Human Medicine subscription required." });
+        return null;
+      }
+    }
+    return { userRow, isAdmin };
+  }
+
+  async function studyGenerate(systemInstruction: string, contents: string, json = false): Promise<string> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw Object.assign(new Error("GEMINI_API_KEY environment variable is not configured on the server."), { status: 500 });
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+    const models = ["gemini-3.6-flash", "gemini-3.7-flash"];
+    let lastErr: any = null;
+    for (const model of models) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              systemInstruction,
+              safetySettings: MEDICAL_CONTENT_SAFETY_SETTINGS,
+              ...(json ? { responseMimeType: 'application/json' } : {})
+            }
+          });
+          const text = response.text || '';
+          if (text.trim()) return text;
+          lastErr = new Error("Empty AI response.");
+        } catch (err: any) {
+          lastErr = err;
+          const retriable = err?.status === 503 || err?.status === 429;
+          console.log(`[STUDY_AI] model=${model} attempt=${attempt} status=${err?.status || 'unknown'}`);
+          if (!retriable) break;
+          await new Promise((r) => setTimeout(r, 1200 * attempt));
+        }
+      }
+    }
+    throw Object.assign(new Error("The AI service is busy right now. Please try again in a minute."), { status: 503, cause: lastErr });
+  }
+
+  const STUDY_TEXT_MAX_CHARS = 400000;
+
+  // POST /api/study-book/:id/summary — AI summary of this part, grounded
+  // only in its text. Generated once and cached on the part for everyone.
+  app.post("/api/study-book/:id/summary", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data: part, error } = await supabase
+        .from('study_book_parts')
+        .select('title, extracted_text, summary')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (error || !part) return res.status(404).json({ success: false, error: "Part not found." });
+
+      const refresh = auth.isAdmin && (req.body?.refresh === true || req.query?.refresh === '1');
+      if (part.summary && !refresh) return res.json({ success: true, summary: part.summary, cached: true });
+
+      if (!part.extracted_text || !part.extracted_text.trim()) {
+        return res.json({ success: false, error: "No text could be extracted from this part, so it can't be summarized." });
+      }
+
+      if (!auth.isAdmin) {
+        const q = consumeAiQuota(String(auth.userRow.id));
+        if (!q.ok) return res.status(429).json({ success: false, error: "Daily AI limit reached. Please come back tomorrow." });
+      }
+
+      const system = `You summarize one chapter of a medical study book titled "${part.title}" for exam revision.
+STRICT RULE: use ONLY the chapter text provided. Do not add outside knowledge or facts not present in the text.
+Format: short markdown. Start with a 2-sentence overview, then "## Key points" as concise bullets grouped under bold topic labels, then "## High-yield facts to memorize" (max 10 bullets). Keep it under 500 words.`;
+      const text = part.extracted_text.slice(0, STUDY_TEXT_MAX_CHARS);
+      const summary = await studyGenerate(system, `--- CHAPTER TEXT ---\n${text}\n--- END ---`);
+
+      await supabase.from('study_book_parts').update({ summary }).eq('id', req.params.id);
+      return res.json({ success: true, summary, cached: false });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-book/:id/summary:", err);
+      return res.status(err?.status === 503 ? 503 : 500).json({ success: false, error: err.message || "Failed to summarize." });
+    }
+  });
+
+  // GET /api/study-book/:id/quiz — 5 MCQs generated from this part's text
+  // only. Generated once and cached on the part (admin can regenerate).
+  app.get("/api/study-book/:id/quiz", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data: part, error } = await supabase
+        .from('study_book_parts')
+        .select('title, extracted_text, quiz_json')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (error || !part) return res.status(404).json({ success: false, error: "Part not found." });
+
+      const refresh = auth.isAdmin && req.query?.refresh === '1';
+      if (Array.isArray(part.quiz_json) && part.quiz_json.length > 0 && !refresh) {
+        return res.json({ success: true, questions: part.quiz_json, cached: true });
+      }
+
+      if (!part.extracted_text || !part.extracted_text.trim()) {
+        return res.json({ success: false, error: "No text could be extracted from this part, so a quiz can't be generated." });
+      }
+
+      if (!auth.isAdmin) {
+        const q = consumeAiQuota(String(auth.userRow.id));
+        if (!q.ok) return res.status(429).json({ success: false, error: "Daily AI limit reached. Please come back tomorrow." });
+      }
+
+      const system = `You write a short exam-style quiz from ONE chapter of a medical study book titled "${part.title}".
+STRICT RULES: base every question and every answer ONLY on the chapter text provided; never use outside knowledge.
+Write exactly 5 single-best-answer multiple-choice questions, each with 4 options, covering different high-yield points.
+Return ONLY a JSON array. Each item: {"question": string, "options": [string,string,string,string], "correctIndex": 0-3, "explanation": string (1-2 sentences, from the text)}.`;
+      const text = part.extracted_text.slice(0, STUDY_TEXT_MAX_CHARS);
+      const raw = await studyGenerate(system, `--- CHAPTER TEXT ---\n${text}\n--- END ---`, true);
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, '').trim());
+      } catch {
+        return res.status(502).json({ success: false, error: "The AI returned an invalid quiz. Please try again." });
+      }
+      const questions = (Array.isArray(parsed) ? parsed : [])
+        .filter((q: any) => q && typeof q.question === 'string' && Array.isArray(q.options) && q.options.length === 4
+          && Number.isInteger(q.correctIndex) && q.correctIndex >= 0 && q.correctIndex <= 3)
+        .slice(0, 5)
+        .map((q: any) => ({
+          question: String(q.question),
+          options: q.options.map((o: any) => String(o)),
+          correctIndex: q.correctIndex,
+          explanation: String(q.explanation || '')
+        }));
+      if (questions.length === 0) {
+        return res.status(502).json({ success: false, error: "The AI returned an invalid quiz. Please try again." });
+      }
+
+      await supabase.from('study_book_parts').update({ quiz_json: questions }).eq('id', req.params.id);
+      return res.json({ success: true, questions, cached: false });
+    } catch (err: any) {
+      console.error("Error in GET /api/study-book/:id/quiz:", err);
+      return res.status(err?.status === 503 ? 503 : 500).json({ success: false, error: err.message || "Failed to generate quiz." });
+    }
+  });
+
+  // POST /api/study-book/:id/quiz-result — stores the student's best score.
+  app.post("/api/study-book/:id/quiz-result", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const score = Number(req.body?.score);
+      const total = Number(req.body?.total);
+      if (!Number.isFinite(score) || !Number.isFinite(total) || total <= 0 || score < 0 || score > total) {
+        return res.status(400).json({ success: false, error: "Invalid score." });
+      }
+      const { data: existing } = await supabase
+        .from('study_book_progress')
+        .select('last_page, quiz_best_score, quiz_total')
+        .eq('user_id', auth.userRow.id)
+        .eq('part_id', req.params.id)
+        .maybeSingle();
+      const prevRatio = existing?.quiz_total ? (existing.quiz_best_score || 0) / existing.quiz_total : -1;
+      const better = score / total >= prevRatio;
+      const { error } = await supabase.from('study_book_progress').upsert({
+        user_id: auth.userRow.id,
+        part_id: req.params.id,
+        last_page: existing?.last_page || 1,
+        quiz_best_score: better ? score : existing?.quiz_best_score,
+        quiz_total: better ? total : existing?.quiz_total,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id,part_id' });
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-book/:id/quiz-result:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ----- Highlights & bookmarks (per user, per part) -----
+  app.get("/api/study-book/:id/marks", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const { data, error } = await supabase
+        .from('study_book_marks')
+        .select('id, kind, page, color, rect, label')
+        .eq('user_id', auth.userRow.id)
+        .eq('part_id', req.params.id)
+        .order('page', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, marks: data || [] });
+    } catch (err: any) {
+      console.error("Error in GET /api/study-book/:id/marks:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/study-book/:id/marks", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const kind = req.body?.kind === 'bookmark' ? 'bookmark' : req.body?.kind === 'highlight' ? 'highlight' : null;
+      const page = Number(req.body?.page);
+      if (!kind || !Number.isInteger(page) || page < 1) {
+        return res.status(400).json({ success: false, error: "kind and a valid page are required." });
+      }
+
+      let rect: any = null;
+      if (kind === 'highlight') {
+        const r = req.body?.rect || {};
+        const x = Number(r.x), y = Number(r.y), w = Number(r.w), h = Number(r.h);
+        if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > 1.001 || y + h > 1.001) {
+          return res.status(400).json({ success: false, error: "Invalid highlight area." });
+        }
+        rect = { x, y, w, h };
+      }
+
+      // Cap per-user marks per part so nobody can bloat the table.
+      const { count } = await supabase
+        .from('study_book_marks')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', auth.userRow.id)
+        .eq('part_id', req.params.id);
+      if ((count || 0) >= 500) return res.status(400).json({ success: false, error: "Mark limit reached for this part." });
+
+      // One bookmark per page: toggling is handled client-side by delete.
+      const color = ['yellow', 'green', 'pink', 'blue'].includes(req.body?.color) ? req.body.color : 'yellow';
+      const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 80) : null;
+      const { data, error } = await supabase
+        .from('study_book_marks')
+        .insert({ user_id: auth.userRow.id, part_id: req.params.id, kind, page, color, rect, label })
+        .select('id, kind, page, color, rect, label')
+        .single();
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, mark: data });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-book/:id/marks:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete("/api/study-book/marks/:markId", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const { error } = await supabase
+        .from('study_book_marks')
+        .delete()
+        .eq('id', req.params.markId)
+        .eq('user_id', auth.userRow.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in DELETE /api/study-book/marks/:markId:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ======================================================================
+  // SPACED REPETITION (questions + flashcards)
+  // Wrong answer -> due in 1 day. Each correct review moves the item to
+  // 3 days, then 7 days, then it graduates (removed). A wrong answer at
+  // any stage restarts it at 1 day.
+  // ======================================================================
+  const REVIEW_INTERVAL_DAYS = [1, 3, 7];
+
+  app.post("/api/review/record", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+      const itemType = req.body?.itemType === 'flashcard' ? 'flashcard' : req.body?.itemType === 'question' ? 'question' : null;
+      const itemId = String(req.body?.itemId || '').trim();
+      const bankId = String(req.body?.bankId || 'human_medicine').trim();
+      const correct = req.body?.correct === true;
+      if (!itemType || !itemId) return res.status(400).json({ success: false, error: "itemType and itemId are required." });
+
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.status(400).json({ success: false, error: "Could not resolve user." });
+
+      const { data: existing } = await supabase
+        .from('review_items')
+        .select('id, stage')
+        .eq('user_id', userRow.id).eq('item_type', itemType).eq('item_id', itemId)
+        .maybeSingle();
+
+      const dueIn = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
+
+      if (!correct) {
+        const { error } = await supabase.from('review_items').upsert({
+          user_id: userRow.id, item_type: itemType, item_id: itemId, bank_id: bankId,
+          stage: 0, next_due: dueIn(REVIEW_INTERVAL_DAYS[0]), updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id,item_type,item_id' });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, status: 'scheduled', nextDueDays: REVIEW_INTERVAL_DAYS[0] });
+      }
+
+      // Correct answer on something not in the review queue: nothing to do.
+      if (!existing) return res.json({ success: true, status: 'ignored' });
+
+      const nextStage = (existing.stage || 0) + 1;
+      if (nextStage >= REVIEW_INTERVAL_DAYS.length) {
+        await supabase.from('review_items').delete().eq('id', existing.id);
+        return res.json({ success: true, status: 'graduated' });
+      }
+      const { error } = await supabase.from('review_items')
+        .update({ stage: nextStage, next_due: dueIn(REVIEW_INTERVAL_DAYS[nextStage]), updated_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, status: 'scheduled', nextDueDays: REVIEW_INTERVAL_DAYS[nextStage] });
+    } catch (err: any) {
+      console.error("Error in POST /api/review/record:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/review/due?bankId=human_medicine — items due now (+ totals).
+  app.get("/api/review/due", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+      const bankId = String(req.query.bankId || 'human_medicine');
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.json({ success: true, due: [], totalQueued: 0 });
+
+      const { data, error } = await supabase
+        .from('review_items')
+        .select('item_type, item_id, stage, next_due')
+        .eq('user_id', userRow.id)
+        .eq('bank_id', bankId)
+        .order('next_due', { ascending: true })
+        .limit(1000);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+
+      const now = Date.now();
+      const rows = data || [];
+      const due = rows.filter((r: any) => new Date(r.next_due).getTime() <= now);
+      return res.json({
+        success: true,
+        due: due.map((r: any) => ({ itemType: r.item_type, itemId: r.item_id, stage: r.stage })),
+        totalQueued: rows.length
+      });
+    } catch (err: any) {
+      console.error("Error in GET /api/review/due:", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 
