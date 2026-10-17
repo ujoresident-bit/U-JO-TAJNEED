@@ -1,252 +1,114 @@
-import { UserStudyStats, Block, OptionKey, Question } from '../types';
-import { getCompletedBlocksForUser, getActiveBlockForUser, getAllStoredBlocks, getUserQuestionStatusSets } from './questionBankService';
-import { getCurrentUser } from './authService';
+import { Block, Question } from '../types';
+import { getStoredBlocks, getStoredQuestions } from './questionBankService';
 
-export interface QuestionStatusCounts {
-  allCount: number;
-  completeCount: number;
-  uncompletedCount: number;
-  unusedCount: number;
+export interface SubjectStat {
+  major: string;
+  total: number;
+  correct: number;
+  pct: number;
 }
 
-export const syncQuestionProgressToSupabase = async (
-  questionId: string,
-  selectedAnswer: OptionKey,
-  isCorrect: boolean
-): Promise<void> => {
-  try {
-    if (typeof window === 'undefined') return;
-    const user = getCurrentUser();
-    await fetch('/api/question-progress', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-telegram-user-id': user.telegramId || '',
-        'x-telegram-username': user.username || ''
-      },
-      body: JSON.stringify({
-        questionId,
-        selectedAnswer,
-        isCorrect
-      })
-    });
-  } catch (err) {
-    console.warn("Background sync of question progress to Supabase failed, falling back to local storage:", err);
-  }
-};
+export interface DayStat {
+  key: string; // YYYY-MM-DD (local)
+  label: string; // e.g. "Oct 16"
+  total: number;
+  correct: number;
+}
 
-export const fetchQuestionProgressFromSupabase = async (): Promise<Array<{
-  id: string;
-  questionId: string;
-  selectedAnswer: OptionKey;
-  isCorrect: boolean;
-  updatedAt: string;
-}>> => {
-  try {
-    if (typeof window === 'undefined') return [];
-    const user = getCurrentUser();
-    const headers: Record<string, string> = {
-      'x-telegram-user-id': user.telegramId || '',
-      'x-telegram-username': user.username || ''
-    };
+export interface BankPerformance {
+  total: number;
+  correct: number;
+  accuracy: number;
+  blocksCompleted: number;
+  bySubject: SubjectStat[]; // weakest first
+  weakest: SubjectStat | null; // lowest accuracy with enough answers to be meaningful
+  days: DayStat[]; // last 30 days, oldest first
+  streak: number; // consecutive days with activity, ending today or yesterday
+  activeDays: number; // active days in the last 30
+  sessions: Block[]; // completed blocks, newest first
+}
 
-    const res = await fetch('/api/question-progress', { headers });
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+const MIN_ANSWERS_FOR_WEAKEST = 5;
 
-    const data = await res.json();
-    if (data && Array.isArray(data.progress)) {
-      return data.progress;
-    }
-  } catch (err) {
-    console.warn("Background fetch of question progress from Supabase failed, falling back to local storage:", err);
-  }
-  return [];
-};
+const dayKey = (d: Date): string => d.toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
 
-export const mergeSupabaseProgressWithLocal = async (userId: string): Promise<void> => {
-  try {
-    const remoteProgress = await fetchQuestionProgressFromSupabase();
-    if (!remoteProgress || remoteProgress.length === 0) return;
+// Everything here is computed locally from the student's own blocks, so it
+// works instantly and never mixes banks.
+export const getBankPerformance = (userId: string, bankId: string): BankPerformance => {
+  const blocks = Object.values(getStoredBlocks()).filter((b) => b.userId === userId && b.bankId === bankId);
+  const questionsById = new Map<string, Question>(getStoredQuestions().map((q) => [q.id, q]));
 
-    // Optional: remote progress retrieved, local state remains authority for active blocks
-  } catch (err) {
-    console.warn("Failed to merge Supabase progress with local storage:", err);
-  }
-};
+  let total = 0;
+  let correct = 0;
+  const subjectMap = new Map<string, { total: number; correct: number }>();
+  const dayMap = new Map<string, { total: number; correct: number }>();
 
-export const getUserStudyStats = (userId: string, bankId?: string): UserStudyStats => {
-  // When a bank is given, stats are computed for that bank only so the
-  // two banks (Human Medicine / Dentistry) never mix.
-  const completedBlocks = getCompletedBlocksForUser(userId).filter((b) => !bankId || b.bankId === bankId);
-  const activeBlock = bankId ? getActiveBlockForUser(userId, bankId) : getActiveBlockForUser(userId);
+  blocks.forEach((block) => {
+    Object.values(block.answers || {}).forEach((ans) => {
+      total += 1;
+      if (ans.isCorrect) correct += 1;
 
-  let totalQuestionsSolved = 0;
-  let totalCorrect = 0;
+      const major = questionsById.get(ans.questionId)?.major || 'Other';
+      const s = subjectMap.get(major) || { total: 0, correct: 0 };
+      s.total += 1;
+      if (ans.isCorrect) s.correct += 1;
+      subjectMap.set(major, s);
 
-  // Aggregate answers from all completed blocks
-  completedBlocks.forEach((block) => {
-    Object.values(block.answers).forEach((ans) => {
-      totalQuestionsSolved += 1;
-      if (ans.isCorrect) totalCorrect += 1;
+      const when = new Date(ans.answeredAt || block.updatedAt);
+      if (!isNaN(when.getTime())) {
+        const k = dayKey(when);
+        const d = dayMap.get(k) || { total: 0, correct: 0 };
+        d.total += 1;
+        if (ans.isCorrect) d.correct += 1;
+        dayMap.set(k, d);
+      }
     });
   });
 
-  // Aggregate answers from current active block
-  if (activeBlock) {
-    Object.values(activeBlock.answers).forEach((ans) => {
-      totalQuestionsSolved += 1;
-      if (ans.isCorrect) totalCorrect += 1;
+  const bySubject: SubjectStat[] = Array.from(subjectMap.entries())
+    .map(([major, v]) => ({ major, total: v.total, correct: v.correct, pct: Math.round((v.correct / v.total) * 100) }))
+    .sort((a, b) => a.pct - b.pct || b.total - a.total);
+
+  const weakest = bySubject.find((s) => s.total >= MIN_ANSWERS_FOR_WEAKEST) || null;
+
+  const days: DayStat[] = [];
+  const today = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    const k = dayKey(d);
+    const v = dayMap.get(k);
+    days.push({
+      key: k,
+      label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      total: v?.total || 0,
+      correct: v?.correct || 0
     });
   }
 
-  const accuracyPercentage =
-    totalQuestionsSolved > 0 ? Math.round((totalCorrect / totalQuestionsSolved) * 100) : 0;
+  // Streak: count back from today; if today has no activity yet, start from
+  // yesterday so a student does not lose the streak before they study.
+  let streak = 0;
+  let cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (!dayMap.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+  while (dayMap.has(dayKey(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  const sessions = blocks
+    .filter((b) => b.status === 'COMPLETED')
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   return {
-    totalQuestionsSolved,
-    totalCorrect,
-    totalIncorrect: totalQuestionsSolved - totalCorrect,
-    accuracyPercentage,
-    blocksCompleted: completedBlocks.length,
-    activeBlocksCount: activeBlock ? 1 : 0,
-    lastQuestionDate: activeBlock?.updatedAt || completedBlocks[0]?.updatedAt || new Date().toISOString(),
-    lastActivityDate: new Date().toISOString()
-  };
-};
-
-export const getUserBlockHistory = (userId: string): Block[] => {
-  return getCompletedBlocksForUser(userId);
-};
-
-export const getQuestionStatusCounts = (
-  userId: string,
-  matchingQuestions: Question[]
-): QuestionStatusCounts => {
-  const { answeredQuestionIds, encounteredQuestionIds } = getUserQuestionStatusSets(userId);
-
-  let completeCount = 0;
-  let uncompletedCount = 0;
-  let unusedCount = 0;
-
-  matchingQuestions.forEach((q) => {
-    if (answeredQuestionIds.has(q.id)) {
-      completeCount += 1;
-    } else if (encounteredQuestionIds.has(q.id)) {
-      uncompletedCount += 1;
-    } else {
-      unusedCount += 1;
-    }
-  });
-
-  return {
-    allCount: matchingQuestions.length,
-    completeCount,
-    uncompletedCount,
-    unusedCount
-  };
-};
-
-export const fetchResetCountFromSupabase = async (userId: string): Promise<number> => {
-  try {
-    if (typeof window === 'undefined') return 0;
-    const user = getCurrentUser();
-    const res = await fetch('/api/user/reset-count', {
-      headers: {
-        'x-telegram-user-id': user.telegramId || '',
-        'x-telegram-username': user.username || ''
-      }
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (typeof data.resetCount === 'number') {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(`ujo_reset_count_${userId}`, String(data.resetCount));
-        }
-        return data.resetCount;
-      }
-    }
-  } catch (err) {
-    console.warn("Failed to fetch reset count from Supabase:", err);
-  }
-
-  // Fallback to localStorage
-  if (typeof localStorage !== 'undefined') {
-    const raw = localStorage.getItem(`ujo_reset_count_${userId}`);
-    if (raw) {
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed)) return parsed;
-    }
-  }
-  return 0;
-};
-
-export const resetUserQuestionBankProgress = async (
-  userId: string
-): Promise<{ success: boolean; resetCount: number; error?: string }> => {
-  const currentResetCount = await fetchResetCountFromSupabase(userId);
-  if (currentResetCount >= 3) {
-    return {
-      success: false,
-      resetCount: currentResetCount,
-      error: "Reset limit reached. You have used all 3 available resets."
-    };
-  }
-
-  // Delete local blocks belonging to user
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const raw = localStorage.getItem('ujo_blocks_v1');
-      if (raw) {
-        const blocksMap: Record<string, Block> = JSON.parse(raw);
-        const updatedBlocksMap: Record<string, Block> = {};
-        Object.entries(blocksMap).forEach(([id, b]) => {
-          if (b.userId !== userId && b.userId !== 'web_resident_01') {
-            updatedBlocksMap[id] = b;
-          }
-        });
-        localStorage.setItem('ujo_blocks_v1', JSON.stringify(updatedBlocksMap));
-      }
-    } catch (e) {
-      console.error("Error clearing local blocks on reset:", e);
-    }
-  }
-
-  let newResetCount = currentResetCount + 1;
-  try {
-    if (typeof window !== 'undefined') {
-      const user = getCurrentUser();
-      const res = await fetch('/api/user/reset-progress', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-telegram-user-id': user.telegramId || '',
-          'x-telegram-username': user.username || ''
-        }
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        return {
-          success: false,
-          resetCount: typeof data.resetCount === 'number' ? data.resetCount : currentResetCount,
-          error: data.error || "Failed to reset progress on server."
-        };
-      }
-
-      if (typeof data.resetCount === 'number') {
-        newResetCount = data.resetCount;
-      }
-    }
-  } catch (err) {
-    console.warn("Server reset-progress call failed, applying local reset:", err);
-  }
-
-  if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(`ujo_reset_count_${userId}`, String(newResetCount));
-  }
-
-  return {
-    success: true,
-    resetCount: newResetCount
+    total,
+    correct,
+    accuracy: total > 0 ? Math.round((correct / total) * 100) : 0,
+    blocksCompleted: sessions.length,
+    bySubject,
+    weakest,
+    days,
+    streak,
+    activeDays: days.filter((d) => d.total > 0).length,
+    sessions
   };
 };
