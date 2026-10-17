@@ -63,8 +63,8 @@ export const ProgressView: React.FC<ProgressViewProps> = ({ onNavigate }) => {
   return (
     <div className="max-w-4xl mx-auto space-y-8 pb-16">
       <div className="space-y-4">
-        <button onClick={() => onNavigate('home')} className="flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors">
-          <ArrowLeft className="w-4 h-4" /><span>Home</span>
+        <button onClick={() => onNavigate('back')} className="flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors">
+          <ArrowLeft className="w-4 h-4" /><span>Back</span>
         </button>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="space-y-1.5">
