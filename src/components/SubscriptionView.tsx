@@ -148,11 +148,11 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({ onNavigate, 
         </button>
 
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all flex items-center gap-1.5 border border-slate-700"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Back to Home</span>
+          <span>Back</span>
         </button>
       </div>
     </div>
