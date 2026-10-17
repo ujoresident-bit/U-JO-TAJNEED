@@ -81,7 +81,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
           Your Telegram user identity (@{session.user.username || session.user.telegramId}) is not registered on the server-side Admin allowlist.
         </p>
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all"
         >
           Return to Home
