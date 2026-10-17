@@ -1,5 +1,6 @@
-import React from 'react';
-import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, Brain, ChevronLeft } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { fetchDueReviews } from '../services/reviewService';
+import { BookOpen, Layers, Sparkles, Clapperboard, GraduationCap, Brain, ChevronLeft, Repeat } from 'lucide-react';
 
 interface SpecialtyHubProps {
   bankId: string;
@@ -13,6 +14,10 @@ interface SpecialtyHubProps {
 // the existing flip-card view) and links to the two new content types
 // (Most Common, Videos) added alongside them.
 export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, onNavigate }) => {
+  const [dueCount, setDueCount] = useState<number | null>(null);
+  useEffect(() => {
+    fetchDueReviews(bankId).then((r) => setDueCount(r.due.length)).catch(() => {});
+  }, [bankId]);
   const cards = [
     {
       key: 'past_years',
@@ -53,6 +58,18 @@ export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, o
       icon: Clapperboard,
       accent: 'purple',
       onClick: () => onNavigate('videos', { bankId })
+    },
+    {
+      key: 'review',
+      title: 'Review',
+      description: dueCount === null
+        ? 'Missed questions and cards come back automatically: 1 day, 3 days, then 7 days.'
+        : dueCount > 0
+          ? `${dueCount} item${dueCount === 1 ? '' : 's'} due for review today.`
+          : 'Nothing due today. Missed items return after 1, 3, then 7 days.',
+      icon: Repeat,
+      accent: 'emerald',
+      onClick: () => onNavigate('review', { bankId })
     },
     {
       key: 'smart_first_aid',
