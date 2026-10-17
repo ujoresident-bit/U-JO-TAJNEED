@@ -62,11 +62,11 @@ export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, o
     <div className="max-w-4xl mx-auto space-y-8 pb-16">
       <div className="space-y-4">
         <button
-          onClick={() => onNavigate('home')}
+          onClick={() => onNavigate('back')}
           className="flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
-          <span>Home</span>
+          <span>Back</span>
         </button>
         <div className="space-y-1.5">
           <h1 className="text-3xl font-semibold tracking-tight text-white">{bankLabel}</h1>
