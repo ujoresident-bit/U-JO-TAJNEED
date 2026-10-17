@@ -1,69 +1,130 @@
-import React from 'react';
-import { Stethoscope, ShieldCheck, User } from 'lucide-react';
-import { resolveSession } from '../services/authService';
+@import "tailwindcss";
 
-interface HeaderProps {
-  currentView: string;
-  onNavigate: (view: string) => void;
-  onRefreshData?: () => void;
+@theme {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
-  const session = resolveSession();
-  const user = session.user;
+/* Design tokens — one calm dark surface scale, one accent. */
+:root {
+  --bg: #07090c;
+  --surface: #0e1217;
+  --surface-2: #131920;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #e6eaf0;
+  --text-dim: #8b95a5;
+  --accent: #22d3ee;
+  --neon-cyan: #22d3ee;
+  --neon-purple: #8b5cf6;
+  --glass: rgba(255, 255, 255, 0.03);
+  --border: var(--line);
+}
 
-  const status =
-    session.isAdmin ? { label: 'Admin', dot: 'bg-cyan-400' }
-    : session.subscriptionStatus === 'ACTIVE' ? { label: 'Active', dot: 'bg-emerald-400' }
-    : session.subscriptionStatus === 'EXPIRED' ? { label: 'Expired', dot: 'bg-rose-400' }
-    : session.subscriptionStatus === 'PENDING' ? { label: 'Pending', dot: 'bg-amber-400' }
-    : { label: 'Not subscribed', dot: 'bg-slate-500' };
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 
-  return (
-    <header className="sticky top-0 z-40 bg-[#07090c]/85 backdrop-blur-md border-b border-white/[0.06]">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-3">
-        <button onClick={() => onNavigate('home')} className="flex items-center gap-2.5 focus:outline-none group">
-          <div className="w-8 h-8 rounded-lg bg-cyan-400/10 border border-cyan-400/25 flex items-center justify-center">
-            <Stethoscope className="w-4 h-4 text-cyan-300" />
-          </div>
-          <span className="text-[15px] font-semibold tracking-tight text-slate-100 group-hover:text-white transition-colors">
-            U JO <span className="text-cyan-300">TAJNEED</span>
-          </span>
-        </button>
+body {
+  background-color: var(--bg);
+  background-image: radial-gradient(1200px 500px at 50% -10%, rgba(34, 211, 238, 0.06), transparent 60%);
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-feature-settings: 'cv11', 'ss01';
+  letter-spacing: -0.005em;
+}
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onNavigate('subscription')}
-            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 border border-white/[0.08] hover:bg-white/[0.04] transition-colors"
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-            {status.label}
-          </button>
+/* Primary surface used all over the app (cards, panels, forms). Solid and
+   quiet: no blur, no glow — hierarchy comes from spacing and contrast. */
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+}
 
-          {session.isAdmin && (
-            <button
-              onClick={() => onNavigate('admin')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                currentView === 'admin'
-                  ? 'bg-cyan-400/10 text-cyan-200 border-cyan-400/40'
-                  : 'text-slate-300 border-white/[0.08] hover:bg-white/[0.04]'
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span className="hidden md:inline">Admin</span>
-            </button>
-          )}
+.ujo-card-hover {
+  transition: border-color 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+.ujo-card-hover:hover {
+  border-color: var(--line-strong);
+  background-color: var(--surface-2);
+  transform: translateY(-1px);
+}
 
-          <div className="flex items-center gap-2.5 pl-1">
-            <p className="hidden md:block text-xs font-medium text-slate-300">
-              {user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'User'}
-            </p>
-            <div className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/[0.08] flex items-center justify-center">
-              <User className="w-4 h-4 text-slate-300" />
-            </div>
-          </div>
-        </div>
-      </div>
-    </header>
-  );
-};
+.neon-text {
+  color: var(--text);
+  text-shadow: none;
+}
+
+.neon-border {
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: none;
+}
+
+.neon-bg {
+  background: var(--accent);
+  color: #04202a;
+  box-shadow: none;
+}
+
+.stats-gradient {
+  background: var(--surface-2);
+}
+
+/* Content Protection Rules */
+.protected-content {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+/* Allow selection in form elements and inputs */
+input,
+textarea,
+select,
+[contenteditable="true"],
+.allow-select,
+.allow-select * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+}
+
+/* Disable image drag */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+.allow-drag-img img {
+  -webkit-user-drag: auto;
+  user-drag: auto;
+}
+
+/* Print protection stylesheet */
+@media print {
+  body {
+    display: none !important;
+  }
+}
+
+/* Page transition — a subtle fade + rise plays every time the current
+   view changes (App.tsx remounts this wrapper via key={currentView}).
+   Kept short and easing-out so it reads as responsive, not sluggish. */
+@keyframes ujo-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: ujo-page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
