@@ -28,6 +28,19 @@ interface AdminImportWizardProps {
   onCancel?: () => void;
 }
 
+// A question needs no AI pass when it already has its explanation, an explanation for every
+// wrong option, and a real major/topic.
+const isQuestionComplete = (q: Question): boolean => {
+  const keys = Object.keys(q.options || {});
+  const wrong = keys.filter((k) => k !== q.correctAnswer);
+  const oe: Record<string, string> = (q.optionExplanations as any) || {};
+  const hasAllWrong = wrong.every((k) => (oe[k] || '').trim().length > 0);
+  const hasExpl = (q.explanation || '').trim().length > 0;
+  const classified =
+    !!q.major && q.major !== 'Unassigned' && !!q.topic && q.topic !== 'Unassigned Topic';
+  return hasExpl && hasAllWrong && classified;
+};
+
 export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
   adminUserId,
   onImportCompleted,
@@ -149,15 +162,24 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
       if (preview.duplicateQuestions.length > 0) {
         setDuplicateAction('skip');
       }
-      setStep(3); // Go to Step 3: Complete Medical Explanations
-      startAiExplanationProcessing(preview.validQuestions);
+      if (preview.validQuestions.every(isQuestionComplete)) {
+        // Everything is already there (explanations, wrong-option explanations, major/topic):
+        // no AI pass needed, go straight to review.
+        setAiTotalCount(preview.validQuestions.length);
+        setAiProcessedCount(preview.validQuestions.length);
+        setAiProcessingComplete(true);
+        setStep(4);
+      } else {
+        setStep(3); // Go to Step 3: Complete Medical Explanations (only for incomplete questions)
+        startAiExplanationProcessing(preview.validQuestions);
+      }
     } catch (err: any) {
       setFileError(err.message || 'Failed to parse questions text content.');
     }
   };
 
   // Step 3: Run Chunked AI Explanation Completion
-  const startAiExplanationProcessing = async (questionsToProcess: Question[]) => {
+  const startAiExplanationProcessing = async (questionsToProcess: Question[], force = false) => {
     if (questionsToProcess.length === 0) {
       setAiProcessingComplete(true);
       return;
@@ -167,14 +189,21 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
     setAiProcessingComplete(false);
     setAiError(null);
     setAiProcessedCount(0);
-    setAiTotalCount(questionsToProcess.length);
 
     const updatedList = [...questionsToProcess];
+    // Only send questions that are missing something (saves AI cost); `force` re-does all.
+    const todo = force ? updatedList : updatedList.filter((q) => !isQuestionComplete(q));
+    setAiTotalCount(todo.length);
+    if (todo.length === 0) {
+      setAiProcessing(false);
+      setAiProcessingComplete(true);
+      return;
+    }
     const CHUNK_SIZE = 15; // Process in chunks of 15 questions per API call
 
     try {
-      for (let i = 0; i < updatedList.length; i += CHUNK_SIZE) {
-        const chunk = updatedList.slice(i, i + CHUNK_SIZE);
+      for (let i = 0; i < todo.length; i += CHUNK_SIZE) {
+        const chunk = todo.slice(i, i + CHUNK_SIZE);
 
         const response = await fetch('/api/ai/complete-explanations', {
           method: 'POST',
@@ -218,7 +247,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
           }
         });
 
-        const newProcessed = Math.min(i + CHUNK_SIZE, updatedList.length);
+        const newProcessed = Math.min(i + CHUNK_SIZE, todo.length);
         setAiProcessedCount(newProcessed);
         setProcessedQuestions([...updatedList]);
       }
@@ -639,7 +668,7 @@ export const AdminImportWizard: React.FC<AdminImportWizardProps> = ({
 
               {!aiProcessing && (
                 <button
-                  onClick={() => startAiExplanationProcessing(processedQuestions)}
+                  onClick={() => startAiExplanationProcessing(processedQuestions, true)}
                   className="px-3.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold flex items-center gap-1.5 transition-all shrink-0"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
