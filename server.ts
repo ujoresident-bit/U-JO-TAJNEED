@@ -4864,9 +4864,10 @@ function isUserAccountActive(userRow: any): boolean {
           pdf_url: publicUrlData.publicUrl,
           page_count: pageCount,
           extracted_text: extractedText,
+          keywords: String(req.body?.keywords || '').trim().slice(0, 300) || null,
           sort_order: Number(req.body?.sortOrder) || 0
         })
-        .select('id, bank_id, title, pdf_url, page_count, sort_order, created_at')
+        .select('id, bank_id, title, pdf_url, page_count, sort_order, keywords, created_at')
         .single();
 
       if (insertErr) return res.status(500).json({ success: false, error: insertErr.message });
@@ -4892,7 +4893,7 @@ function isUserAccountActive(userRow: any): boolean {
 
       const { data, error } = await supabase
         .from('study_book_parts')
-        .select('id, bank_id, title, pdf_url, page_count, sort_order, created_at')
+        .select('id, bank_id, title, pdf_url, page_count, sort_order, keywords, created_at')
         .order('sort_order', { ascending: true })
         .order('created_at', { ascending: true });
 
@@ -4900,6 +4901,29 @@ function isUserAccountActive(userRow: any): boolean {
       return res.json({ success: true, parts: data || [] });
     } catch (err: any) {
       console.error("Error in GET /api/admin/study-book:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // PATCH /api/admin/study-book/:id — edit title / question-topic keywords.
+  app.patch("/api/admin/study-book/:id", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
+      if (!verifyServerAdminAuthorization(requesterId) && !verifyServerAdminAuthorization(requesterUsername)) {
+        return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      }
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const patch: any = {};
+      if (typeof req.body?.keywords === 'string') patch.keywords = req.body.keywords.trim().slice(0, 300) || null;
+      if (typeof req.body?.title === 'string' && req.body.title.trim()) patch.title = req.body.title.trim().slice(0, 200);
+      if (Object.keys(patch).length === 0) return res.status(400).json({ success: false, error: "Nothing to update." });
+      const { error } = await supabase.from('study_book_parts').update(patch).eq('id', req.params.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in PATCH /api/admin/study-book/:id:", err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -4950,7 +4974,7 @@ function isUserAccountActive(userRow: any): boolean {
 
       const { data: parts, error } = await supabase
         .from('study_book_parts')
-        .select('id, bank_id, title, pdf_url, page_count, sort_order')
+        .select('id, bank_id, title, pdf_url, page_count, sort_order, keywords')
         .eq('bank_id', 'human_medicine')
         .order('sort_order', { ascending: true })
         .order('created_at', { ascending: true });
@@ -5298,6 +5322,109 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
     }
   });
 
+  // GET /api/study-book/:id/cards — 12 flashcards generated from this
+  // part's text only. Generated once and cached on the part.
+  app.get("/api/study-book/:id/cards", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data: part, error } = await supabase
+        .from('study_book_parts')
+        .select('title, extracted_text, cards_json')
+        .eq('id', req.params.id)
+        .maybeSingle();
+      if (error || !part) return res.status(404).json({ success: false, error: "Part not found." });
+
+      const refresh = auth.isAdmin && req.query?.refresh === '1';
+      const { count: addedCount } = await supabase
+        .from('user_cards').select('id', { count: 'exact', head: true })
+        .eq('user_id', auth.userRow.id).eq('part_id', req.params.id).eq('source', 'ai');
+
+      if (Array.isArray(part.cards_json) && part.cards_json.length > 0 && !refresh) {
+        return res.json({ success: true, cards: part.cards_json, cached: true, added: (addedCount || 0) > 0 });
+      }
+      if (!part.extracted_text || !part.extracted_text.trim()) {
+        return res.json({ success: false, error: "No text could be extracted from this part, so flashcards can't be generated." });
+      }
+      if (!auth.isAdmin) {
+        const q = consumeAiQuota(String(auth.userRow.id));
+        if (!q.ok) return res.status(429).json({ success: false, error: "Daily AI limit reached. Please come back tomorrow." });
+      }
+
+      const system = `You create exam-revision flashcards from ONE chapter of a medical study book titled "${part.title}".
+STRICT RULES: use ONLY the chapter text provided; never add outside knowledge.
+Write exactly 12 high-yield flashcards. Each is a short question on the front and a concise answer on the back (max 25 words).
+Prefer specific, testable facts (diagnosis-clue, mechanism, first-line treatment, classic association). No duplicates.
+Return ONLY a JSON array: [{"front": string, "back": string}].`;
+      const text = part.extracted_text.slice(0, STUDY_TEXT_MAX_CHARS);
+      const raw = await studyGenerate(system, `--- CHAPTER TEXT ---\n${text}\n--- END ---`, true);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(raw.replace(/^```json\s*|\s*```$/g, '').trim());
+      } catch {
+        return res.status(502).json({ success: false, error: "The AI returned invalid cards. Please try again." });
+      }
+      const cards = (Array.isArray(parsed) ? parsed : [])
+        .filter((c: any) => c && typeof c.front === 'string' && typeof c.back === 'string' && c.front.trim() && c.back.trim())
+        .slice(0, 12)
+        .map((c: any) => ({ front: String(c.front).trim().slice(0, 400), back: String(c.back).trim().slice(0, 500) }));
+      if (cards.length === 0) {
+        return res.status(502).json({ success: false, error: "The AI returned invalid cards. Please try again." });
+      }
+      await supabase.from('study_book_parts').update({ cards_json: cards }).eq('id', req.params.id);
+      return res.json({ success: true, cards, cached: false, added: (addedCount || 0) > 0 });
+    } catch (err: any) {
+      console.error("Error in GET /api/study-book/:id/cards:", err);
+      return res.status(err?.status === 503 ? 503 : 500).json({ success: false, error: err.message || "Failed to generate cards." });
+    }
+  });
+
+  // POST /api/study-book/:id/cards/add-to-review — copies the part's AI
+  // cards into the student's own deck + daily review. Safe to call twice.
+  app.post("/api/study-book/:id/cards/add-to-review", async (req, res) => {
+    try {
+      const auth = await authorizeHumanMedicine(req, res);
+      if (!auth) return;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+
+      const { data: part } = await supabase
+        .from('study_book_parts').select('cards_json').eq('id', req.params.id).maybeSingle();
+      const cards: { front: string; back: string }[] = Array.isArray(part?.cards_json) ? part!.cards_json : [];
+      if (cards.length === 0) return res.status(400).json({ success: false, error: "Generate the cards first." });
+
+      const { count } = await supabase
+        .from('user_cards').select('id', { count: 'exact', head: true })
+        .eq('user_id', auth.userRow.id).eq('part_id', req.params.id).eq('source', 'ai');
+      if ((count || 0) > 0) return res.json({ success: true, added: 0, alreadyAdded: true });
+
+      const { data: inserted, error } = await supabase
+        .from('user_cards')
+        .insert(cards.map((c) => ({
+          user_id: auth.userRow.id, part_id: req.params.id, page: null,
+          front: c.front, back: c.back, source: 'ai', bank_id: 'human_medicine'
+        })))
+        .select('id');
+      if (error) return res.status(500).json({ success: false, error: error.message });
+
+      const due = new Date(Date.now() + 86400000).toISOString();
+      await supabase.from('review_items').upsert(
+        (inserted || []).map((r: any) => ({
+          user_id: auth.userRow.id, item_type: 'user_card', item_id: r.id, bank_id: 'human_medicine',
+          stage: 0, next_due: due, updated_at: new Date().toISOString()
+        })),
+        { onConflict: 'user_id,item_type,item_id' }
+      );
+      return res.json({ success: true, added: (inserted || []).length });
+    } catch (err: any) {
+      console.error("Error in POST /api/study-book/:id/cards/add-to-review:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ----- Highlights & bookmarks (per user, per part) -----
   app.get("/api/study-book/:id/marks", async (req, res) => {
     try {
@@ -5307,7 +5434,7 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
       if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
       const { data, error } = await supabase
         .from('study_book_marks')
-        .select('id, kind, page, color, rect, label')
+        .select('id, kind, page, color, rect, label, text')
         .eq('user_id', auth.userRow.id)
         .eq('part_id', req.params.id)
         .order('page', { ascending: true })
@@ -5333,14 +5460,23 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
         return res.status(400).json({ success: false, error: "kind and a valid page are required." });
       }
 
+      const validRect = (r: any) => {
+        const x = Number(r?.x), y = Number(r?.y), w = Number(r?.w), h = Number(r?.h);
+        if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > 1.001 || y + h > 1.001) return null;
+        return { x, y, w, h };
+      };
       let rect: any = null;
       if (kind === 'highlight') {
-        const r = req.body?.rect || {};
-        const x = Number(r.x), y = Number(r.y), w = Number(r.w), h = Number(r.h);
-        if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > 1.001 || y + h > 1.001) {
-          return res.status(400).json({ success: false, error: "Invalid highlight area." });
+        if (Array.isArray(req.body?.rects)) {
+          // Real text highlight: one rectangle per line of selected text.
+          const rects = req.body.rects.slice(0, 80).map(validRect).filter(Boolean);
+          if (rects.length === 0) return res.status(400).json({ success: false, error: "Invalid highlight area." });
+          rect = { rects };
+        } else {
+          const one = validRect(req.body?.rect);
+          if (!one) return res.status(400).json({ success: false, error: "Invalid highlight area." });
+          rect = one;
         }
-        rect = { x, y, w, h };
       }
 
       // Cap per-user marks per part so nobody can bloat the table.
@@ -5354,13 +5490,37 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
       // One bookmark per page: toggling is handled client-side by delete.
       const color = ['yellow', 'green', 'pink', 'blue'].includes(req.body?.color) ? req.body.color : 'yellow';
       const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 80) : null;
+      const text = kind === 'highlight' && typeof req.body?.text === 'string' ? req.body.text.replace(/\s+/g, ' ').trim().slice(0, 600) || null : null;
       const { data, error } = await supabase
         .from('study_book_marks')
-        .insert({ user_id: auth.userRow.id, part_id: req.params.id, kind, page, color, rect, label })
-        .select('id, kind, page, color, rect, label')
+        .insert({ user_id: auth.userRow.id, part_id: req.params.id, kind, page, color, rect, label, text })
+        .select('id, kind, page, color, rect, label, text')
         .single();
       if (error) return res.status(500).json({ success: false, error: error.message });
-      return res.json({ success: true, mark: data });
+
+      // Optionally turn the highlight into a personal flashcard that joins
+      // the daily spaced-repetition review (first review tomorrow).
+      let card: any = null;
+      const cf = req.body?.card;
+      if (kind === 'highlight' && cf && typeof cf.front === 'string' && typeof cf.back === 'string' && cf.front.trim() && cf.back.trim()) {
+        const { data: cardRow } = await supabase
+          .from('user_cards')
+          .insert({
+            user_id: auth.userRow.id, part_id: req.params.id, page,
+            front: cf.front.trim().slice(0, 900), back: cf.back.trim().slice(0, 900),
+            source: 'highlight', source_mark_id: data.id, bank_id: 'human_medicine'
+          })
+          .select('id')
+          .single();
+        if (cardRow?.id) {
+          await supabase.from('review_items').upsert({
+            user_id: auth.userRow.id, item_type: 'user_card', item_id: cardRow.id, bank_id: 'human_medicine',
+            stage: 0, next_due: new Date(Date.now() + 86400000).toISOString(), updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id,item_type,item_id' });
+          card = { id: cardRow.id };
+        }
+      }
+      return res.json({ success: true, mark: data, card });
     } catch (err: any) {
       console.error("Error in POST /api/study-book/:id/marks:", err);
       return res.status(500).json({ success: false, error: err.message });
@@ -5373,6 +5533,15 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
       if (!auth) return;
       const supabase = getSupabase();
       if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      // Remove any flashcard that was created from this highlight.
+      const { data: linked } = await supabase
+        .from('user_cards').select('id')
+        .eq('source_mark_id', req.params.markId).eq('user_id', auth.userRow.id);
+      const linkedIds = (linked || []).map((c: any) => c.id);
+      if (linkedIds.length > 0) {
+        await supabase.from('review_items').delete().eq('user_id', auth.userRow.id).eq('item_type', 'user_card').in('item_id', linkedIds);
+        await supabase.from('user_cards').delete().in('id', linkedIds).eq('user_id', auth.userRow.id);
+      }
       const { error } = await supabase
         .from('study_book_marks')
         .delete()
@@ -5398,7 +5567,7 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
     try {
       const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
       const requesterUsername = (req.headers['x-telegram-username'] || req.body?.username || '') as string;
-      const itemType = req.body?.itemType === 'flashcard' ? 'flashcard' : req.body?.itemType === 'question' ? 'question' : null;
+      const itemType = req.body?.itemType === 'flashcard' ? 'flashcard' : req.body?.itemType === 'question' ? 'question' : req.body?.itemType === 'user_card' ? 'user_card' : null;
       const itemId = String(req.body?.itemId || '').trim();
       const bankId = String(req.body?.bankId || 'human_medicine').trim();
       const correct = req.body?.correct === true;
@@ -5468,9 +5637,30 @@ Return ONLY a JSON array. Each item: {"question": string, "options": [string,str
       const now = Date.now();
       const rows = data || [];
       const due = rows.filter((r: any) => new Date(r.next_due).getTime() <= now);
+      // Personal cards (from highlights / AI) carry their own text.
+      const cardIds = due.filter((r: any) => r.item_type === 'user_card').map((r: any) => r.item_id);
+      let cards: any[] = [];
+      if (cardIds.length > 0) {
+        const { data: cardRows } = await supabase
+          .from('user_cards')
+          .select('id, front, back, page, part_id, source')
+          .eq('user_id', userRow.id)
+          .in('id', cardIds);
+        const partIds = Array.from(new Set((cardRows || []).map((c: any) => c.part_id).filter(Boolean)));
+        const titles: Record<string, string> = {};
+        if (partIds.length > 0) {
+          const { data: partRows } = await supabase.from('study_book_parts').select('id, title').in('id', partIds);
+          (partRows || []).forEach((p: any) => { titles[p.id] = p.title; });
+        }
+        cards = (cardRows || []).map((c: any) => ({
+          id: c.id, front: c.front, back: c.back, page: c.page, partId: c.part_id,
+          partTitle: c.part_id ? titles[c.part_id] || null : null, source: c.source
+        }));
+      }
       return res.json({
         success: true,
         due: due.map((r: any) => ({ itemType: r.item_type, itemId: r.item_id, stage: r.stage })),
+        cards,
         totalQueued: rows.length
       });
     } catch (err: any) {
