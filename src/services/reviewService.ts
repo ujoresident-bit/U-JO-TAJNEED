@@ -1,7 +1,17 @@
 import { resolveSession } from './authService';
 
+export interface UserCardData {
+  id: string;
+  front: string;
+  back: string;
+  page: number | null;
+  partId: string | null;
+  partTitle: string | null;
+  source: 'highlight' | 'ai';
+}
+
 export interface DueReviewItem {
-  itemType: 'question' | 'flashcard';
+  itemType: 'question' | 'flashcard' | 'user_card';
   itemId: string;
   stage: number;
 }
@@ -15,7 +25,7 @@ const authHeaders = (): Record<string, string> => {
 // A wrong answer schedules the item (1 day → 3 days → 7 days); a correct
 // answer on an already-queued item advances it.
 export const recordReview = (
-  itemType: 'question' | 'flashcard',
+  itemType: 'question' | 'flashcard' | 'user_card',
   itemId: string,
   correct: boolean,
   bankId: string = 'human_medicine'
@@ -31,11 +41,11 @@ export const recordReview = (
 
 export const fetchDueReviews = async (
   bankId: string = 'human_medicine'
-): Promise<{ due: DueReviewItem[]; totalQueued: number }> => {
+): Promise<{ due: DueReviewItem[]; cards: UserCardData[]; totalQueued: number }> => {
   try {
     const res = await fetch(`/api/review/due?bankId=${encodeURIComponent(bankId)}`, { headers: authHeaders() });
     const data = await res.json();
-    if (data?.success) return { due: data.due || [], totalQueued: data.totalQueued || 0 };
+    if (data?.success) return { due: data.due || [], cards: data.cards || [], totalQueued: data.totalQueued || 0 };
   } catch {}
-  return { due: [], totalQueued: 0 };
+  return { due: [], cards: [], totalQueued: 0 };
 };
