@@ -8,6 +8,7 @@ interface BookPart {
   pdf_url: string;
   page_count: number;
   sort_order: number;
+  keywords?: string | null;
 }
 
 // Admin manager for Smart First Aid Step1 v2 — the admin's own book,
@@ -19,6 +20,7 @@ export const AdminStudyContentManager: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState('');
+  const [keywords, setKeywords] = useState('');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -49,6 +51,7 @@ export const AdminStudyContentManager: React.FC = () => {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('title', title.trim());
+      if (keywords.trim()) fd.append('keywords', keywords.trim());
       const res = await fetch('/api/admin/study-book/upload', { method: 'POST', headers: authHeaders, body: fd });
       const data = await res.json();
       if (data.success) {
@@ -58,6 +61,7 @@ export const AdminStudyContentManager: React.FC = () => {
             : `"${title}" uploaded — ${data.part.page_count} pages, but no text could be extracted (scanned/image-only PDF). The AI assistant won't have grounding text for this part.`
         );
         setTitle('');
+        setKeywords('');
         if (fileRef.current) fileRef.current.value = '';
         setShowForm(false);
         loadParts();
@@ -70,6 +74,19 @@ export const AdminStudyContentManager: React.FC = () => {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleEditKeywords = async (p: BookPart) => {
+    const next = window.prompt('Question topics for this part (comma separated, e.g. Cardiology, Cardiovascular):', p.keywords || '');
+    if (next === null) return;
+    const res = await fetch(`/api/admin/study-book/${p.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ keywords: next })
+    });
+    const data = await res.json();
+    if (data.success) loadParts();
+    else alert(data.error || 'Failed to update.');
   };
 
   const handleDelete = async (id: string) => {
@@ -119,6 +136,11 @@ export const AdminStudyContentManager: React.FC = () => {
               <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Cardiovascular System" className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100" />
             </div>
             <div className="space-y-1">
+              <label className="text-slate-400 font-bold">Question topics (optional)</label>
+              <input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="e.g. Cardiology, Cardiovascular — matches the Major/Topic names of your questions" className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100" />
+              <p className="text-[10px] text-slate-500">Used to link this part to its practice questions. Leave empty to match by the part title.</p>
+            </div>
+            <div className="space-y-1">
               <label className="text-slate-400 font-bold">PDF File *</label>
               <input ref={fileRef} type="file" accept="application/pdf" className="hidden" onChange={() => setError(null)} />
               <button
@@ -155,8 +177,11 @@ export const AdminStudyContentManager: React.FC = () => {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-bold text-slate-100 truncate">{p.title}</p>
-                <p className="text-[10px] text-slate-500">{p.page_count} pages</p>
+                <p className="text-[10px] text-slate-500">{p.page_count} pages{p.keywords ? ` · topics: ${p.keywords}` : ''}</p>
               </div>
+              <button onClick={() => handleEditKeywords(p)} className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 hover:text-white">
+                Topics
+              </button>
               <button onClick={() => handleDelete(p.id)} className="p-2 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-400">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
