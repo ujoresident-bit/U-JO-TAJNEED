@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { recordReview } from '../services/reviewService';
+import { loadFirstAidParts, bestPartForQuestion, LinkablePart } from '../services/firstAidLinkService';
 import {
   ArrowLeft,
   Layers,
@@ -51,6 +52,18 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
   const [struckOptions, setStruckOptions] = useState<OptionKey[]>([]);
   const [isHighlightMode, setIsHighlightMode] = useState<boolean>(false);
   const stemRef = React.useRef<HTMLDivElement>(null);
+
+  // Human Medicine: the First Aid part that best matches this question's topic.
+  const [faPart, setFaPart] = useState<LinkablePart | null>(null);
+  useEffect(() => {
+    const q = questions[currentIndex];
+    if (!q || q.bankId !== 'human_medicine') { setFaPart(null); return; }
+    let cancelled = false;
+    loadFirstAidParts().then((parts) => {
+      if (!cancelled) setFaPart(bestPartForQuestion(q, parts));
+    });
+    return () => { cancelled = true; };
+  }, [questions, currentIndex]);
 
   useEffect(() => {
     const loadedBlock = getBlock(blockId);
@@ -472,6 +485,16 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
           selectedAnswer={currentAnswer.selectedAnswer}
           stats={stats}
         />
+      )}
+
+      {isAnswered && faPart && (
+        <button
+          onClick={() => onNavigate('smart_first_aid', { partId: faPart.id })}
+          className="w-full px-4 py-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/15 text-cyan-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+        >
+          <Layers className="w-4 h-4" />
+          <span>Read about this in First Aid · {faPart.title}</span>
+        </button>
       )}
 
       {/* Bottom Navigation Controls */}
