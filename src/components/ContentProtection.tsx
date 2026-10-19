@@ -49,7 +49,10 @@ export const ContentProtection: React.FC<ContentProtectionProps> = ({ children }
       if (!isFormOrAllowedElement(e.target)) {
         e.preventDefault();
         e.stopPropagation();
-        triggerToast('Copying content is not allowed.');
+        // Long-press on the book's selectable text must stay quiet.
+        if (!(e.target instanceof HTMLElement && e.target.closest('.ujo-textlayer'))) {
+          triggerToast('Copying content is not allowed.');
+        }
       }
     };
 
