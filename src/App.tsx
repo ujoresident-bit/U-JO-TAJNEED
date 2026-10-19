@@ -64,16 +64,19 @@ export default function App() {
 
   const handleNavigate = (view: string, params: any = {}) => {
     if (view === 'back') {
-      // Skip finished/in-progress question screens when going back.
-      let prev = historyRef.current.pop();
-      while (prev && prev.view === 'question_screen') prev = historyRef.current.pop();
+      const prev = historyRef.current.pop();
       goTo(prev ? prev.view : 'home', prev ? prev.params : {});
       return;
     }
     const cur = currentRef.current;
     if (view === 'home') {
       historyRef.current = [];
-    } else if (cur.view !== view || JSON.stringify(cur.params) !== JSON.stringify(params)) {
+    } else if (
+      (cur.view !== view || JSON.stringify(cur.params) !== JSON.stringify(params)) &&
+      // A finished/abandoned question block is not a place to come "back" to,
+      // except when the student detours to First Aid mid-block.
+      !(cur.view === 'question_screen' && view !== 'smart_first_aid')
+    ) {
       historyRef.current.push(cur);
       if (historyRef.current.length > 50) historyRef.current.shift();
     }
@@ -178,7 +181,7 @@ export default function App() {
           {currentView === 'most_common' && <MostCommonView onNavigate={handleNavigate} />}
           {currentView === 'videos' && <VideosView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
           {currentView === 'qbank_basic' && <QBankBasicView onNavigate={handleNavigate} bankId={viewParams.bankId || 'human_medicine'} />}
-          {currentView === 'smart_first_aid' && <SmartFirstAidView onNavigate={handleNavigate} />}
+          {currentView === 'smart_first_aid' && <SmartFirstAidView onNavigate={handleNavigate} initialPartId={viewParams.partId} initialPage={viewParams.page} />}
           {currentView === 'review' && <ReviewView bankId={viewParams.bankId || 'human_medicine'} onNavigate={handleNavigate} />}
 
           {currentView === 'question_screen' && (
