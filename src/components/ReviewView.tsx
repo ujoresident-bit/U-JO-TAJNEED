@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, RotateCcw, CheckCircle2, XCircle, Loader2, Repeat } from 'lucide-react';
-import { fetchDueReviews, recordReview, DueReviewItem } from '../services/reviewService';
+import { fetchDueReviews, recordReview, DueReviewItem, UserCardData } from '../services/reviewService';
 import { getStoredQuestions } from '../services/questionBankService';
 import { getFlashcards, syncFlashcardsFromSupabase } from '../services/flashcardService';
 import { Flashcard, OptionKey, Question } from '../types';
@@ -12,7 +12,8 @@ interface ReviewViewProps {
 
 type ReviewEntry =
   | { kind: 'question'; id: string; question: Question }
-  | { kind: 'flashcard'; id: string; card: Flashcard };
+  | { kind: 'flashcard'; id: string; card: Flashcard }
+  | { kind: 'usercard'; id: string; card: UserCardData };
 
 // Daily spaced-repetition session: everything the student previously got
 // wrong that is now due (1 day → 3 days → 7 days), questions and flashcards.
@@ -29,7 +30,8 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ bankId, onNavigate }) =>
 
   useEffect(() => {
     (async () => {
-      const { due, totalQueued: queued } = await fetchDueReviews(bankId);
+      const { due, cards: userCards, totalQueued: queued } = await fetchDueReviews(bankId);
+      const userCardsById = new Map(userCards.map((c) => [c.id, c]));
       setTotalQueued(queued);
       // Make sure local flashcard caches are fresh before mapping ids.
       await Promise.all([
@@ -45,6 +47,9 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ bankId, onNavigate }) =>
         if (d.itemType === 'question') {
           const q = questionsById.get(d.itemId);
           if (q) built.push({ kind: 'question', id: d.itemId, question: q });
+        } else if (d.itemType === 'user_card') {
+          const c = userCardsById.get(d.itemId);
+          if (c) built.push({ kind: 'usercard', id: d.itemId, card: c });
         } else {
           const c = cardsById.get(d.itemId);
           if (c) built.push({ kind: 'flashcard', id: d.itemId, card: c });
@@ -78,9 +83,9 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ bankId, onNavigate }) =>
   };
 
   const answerCard = (ok: boolean) => {
-    if (!current || current.kind !== 'flashcard') return;
+    if (!current || (current.kind !== 'flashcard' && current.kind !== 'usercard')) return;
     if (ok) setCorrectCount((c) => c + 1);
-    recordReview('flashcard', current.id, ok, bankId);
+    recordReview(current.kind === 'usercard' ? 'user_card' : 'flashcard', current.id, ok, bankId);
     advance();
   };
 
@@ -201,9 +206,25 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ bankId, onNavigate }) =>
             <span className={`text-[10px] font-bold uppercase tracking-widest ${flipped ? 'text-emerald-400' : 'text-cyan-400'}`}>
               {flipped ? 'Answer' : 'Question — tap to reveal'}
             </span>
+            {current.kind === 'usercard' && (current.card.partTitle || current.card.page) && (
+              <span className="text-[10px] text-slate-500">
+                {current.card.partTitle}{current.card.page ? ` · p.${current.card.page}` : ''}
+              </span>
+            )}
             <p className={`text-base sm:text-lg leading-relaxed whitespace-pre-wrap ${flipped ? 'text-emerald-100 font-semibold' : 'text-slate-100 font-medium'}`}>
-              {flipped ? current.card.answer : current.card.question}
+              {current.kind === 'usercard'
+                ? (flipped ? current.card.back : current.card.front)
+                : (flipped ? current.card.answer : current.card.question)}
             </p>
+            {flipped && current.kind === 'usercard' && current.card.partId && (
+              <span
+                role="button"
+                onClick={(e) => { e.stopPropagation(); onNavigate('smart_first_aid', { partId: current.card.partId, page: current.card.page || 1 }); }}
+                className="mt-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[11px] text-cyan-300"
+              >
+                Open in First Aid
+              </span>
+            )}
           </button>
           {flipped ? (
             <div className="grid grid-cols-2 gap-3">
