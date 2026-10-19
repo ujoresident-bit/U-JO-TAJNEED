@@ -128,3 +128,39 @@ img {
 .page-transition {
   animation: ujo-page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+
+/* ---- Smart First Aid: selectable PDF text layer (copying stays blocked by ContentProtection) ---- */
+.ujo-textlayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  forced-color-adjust: none;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.ujo-textlayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+.ujo-textlayer > :not(.markedContent),
+.ujo-textlayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.ujo-textlayer .markedContent { display: contents; }
+.ujo-textlayer ::selection { background: rgba(34, 211, 238, 0.35); }
