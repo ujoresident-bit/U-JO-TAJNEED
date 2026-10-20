@@ -1014,7 +1014,7 @@ export const updateSingleQuestion = async (
     throw new Error('UNAUTHORIZED_ADMIN_ONLY: Authorization required.');
   }
 
-  const isNeedsReview = !updatedQ.major || updatedQ.major === 'Unassigned Topic' || !updatedQ.topic;
+  const isNeedsReview = !!updatedQ.needsReview || !updatedQ.major || updatedQ.major === 'Unassigned' || !updatedQ.topic || updatedQ.topic === 'Unassigned Topic';
 
   const savedQ: Question = {
     ...updatedQ,
