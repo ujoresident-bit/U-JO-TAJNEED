@@ -985,7 +985,7 @@ async function startServer() {
           year: (typeof q.year === 'string' && isNaN(Number(q.year))) ? q.year : Number(q.year || 2025),
           isMostCommon: Boolean(q.is_most_common ?? q.isMostCommon ?? false),
           difficulty: q.difficulty || 'Medium',
-          classificationStatus: q.classification_status || q.classificationStatus || 'CLASSIFIED',
+          classificationStatus: q.classification_status || q.classificationStatus || (Boolean(q.needs_review ?? q.needsReview ?? false) ? 'NEEDS_REVIEW' : 'CLASSIFIED'),
           createdAt: q.created_at || q.createdAt,
           updatedAt: q.updated_at || q.updatedAt
         };
