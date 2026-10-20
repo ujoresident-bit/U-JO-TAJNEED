@@ -74,6 +74,19 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
     if (onRefreshStats) onRefreshStats();
   };
 
+  // A question needs review only if flagged by the importer/AI or it has no real major/topic.
+  const statusOf = (q: Question): 'NEEDS_REVIEW' | 'CLASSIFIED' =>
+    q.needsReview ||
+    !q.major || q.major === 'Unassigned' ||
+    !q.topic || q.topic === 'Unassigned Topic'
+      ? 'NEEDS_REVIEW'
+      : 'CLASSIFIED';
+
+  // Years actually present in the bank (numbers and labels like "TAJNEED 2024")
+  const availableYears = Array.from(new Set<string>(questions.map((q) => String(q.year)))).sort((a, b) =>
+    b.localeCompare(a, undefined, { numeric: true })
+  );
+
   // Unique Majors list
   const availableMajors = Array.from(
     new Set(questions.map((q) => q.major || 'Unassigned'))
@@ -102,8 +115,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
     if (selectedYear !== 'All' && String(q.year) !== String(selectedYear)) return false;
     if (selectedMajor !== 'All' && q.major !== selectedMajor) return false;
     if (selectedClassification !== 'All') {
-      const status = q.classificationStatus || 'CLASSIFIED';
-      if (status !== selectedClassification) return false;
+      if (statusOf(q) !== selectedClassification) return false;
     }
 
     return true;
@@ -362,10 +374,10 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
               className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none"
             >
               <option value="All">
-                {selectedBank === 'qbank_basic' ? 'Not year-restricted' : 'All Years (2015-2025)'}
+                {selectedBank === 'qbank_basic' ? 'Not year-restricted' : 'All Years'}
               </option>
               {selectedBank !== 'qbank_basic' &&
-                Array.from({ length: 11 }, (_, i) => 2015 + i).map((yr) => (
+                availableYears.map((yr) => (
                   <option key={yr} value={yr}>
                     {yr}
                   </option>
@@ -458,12 +470,12 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
                     <td className="p-3.5 whitespace-nowrap">
                       <span
                         className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
-                          q.classificationStatus === 'NEEDS_REVIEW'
+                          statusOf(q) === 'NEEDS_REVIEW'
                             ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                             : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                         }`}
                       >
-                        {q.classificationStatus || 'CLASSIFIED'}
+                        {statusOf(q)}
                       </span>
                     </td>
                     <td className="p-3.5 text-right whitespace-nowrap">
@@ -557,7 +569,7 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
 
               <div className="space-y-1.5">
                 <span className="text-slate-400 font-semibold block">Answer Options:</span>
-                {(['A', 'B', 'C', 'D'] as OptionKey[]).map((k) => (
+                {(['A', 'B', 'C', 'D', 'E'] as OptionKey[]).filter((k) => k !== 'E' || (viewQuestion.options as any)['E']).map((k) => (
                   <div
                     key={k}
                     className={`p-2.5 rounded-xl border flex items-center gap-2 ${
@@ -576,10 +588,21 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
 
               <div>
                 <span className="text-slate-400 font-semibold block mb-1">Explanation:</span>
-                <div className="p-3 rounded-xl bg-slate-950 text-slate-300 leading-relaxed">
+                <div className="p-3 rounded-xl bg-slate-950 text-slate-300 leading-relaxed whitespace-pre-wrap">
                   {viewQuestion.explanation}
                 </div>
               </div>
+
+              {viewQuestion.optionExplanations && Object.keys(viewQuestion.optionExplanations).length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-slate-400 font-semibold block">Why the other options are wrong:</span>
+                  {Object.entries(viewQuestion.optionExplanations).map(([k, v]) => (
+                    <div key={k} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      <strong className="text-rose-300">{k}.</strong> {String(v)}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -607,9 +630,10 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
               <div>
                 <label className="font-semibold text-slate-300 block mb-1">Year</label>
                 <input
-                  type="number"
-                  value={editQuestion.year}
-                  onChange={(e) => setEditQuestion({ ...editQuestion, year: Number(e.target.value) })}
+                  type="text"
+                  value={String(editQuestion.year ?? '')}
+                  placeholder="e.g. 2024 or TAJNEED 2024"
+                  onChange={(e) => setEditQuestion({ ...editQuestion, year: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
                 />
               </div>
@@ -646,15 +670,15 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="font-semibold text-slate-300 block">Options A – D</label>
-              {(['A', 'B', 'C', 'D'] as OptionKey[]).map((k) => (
+              <label className="font-semibold text-slate-300 block">Options</label>
+              {(['A', 'B', 'C', 'D', 'E'] as OptionKey[]).filter((k) => k !== 'E' || (editQuestion.options as any)['E']).map((k) => (
                 <div key={k} className="flex items-center gap-2">
                   <span className="w-6 h-6 rounded-lg bg-slate-800 flex items-center justify-center font-bold shrink-0">
                     {k}
                   </span>
                   <input
                     type="text"
-                    value={editQuestion.options[k]}
+                    value={editQuestion.options[k] || ''}
                     onChange={(e) =>
                       setEditQuestion({
                         ...editQuestion,
@@ -703,12 +727,50 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
             <div>
               <label className="font-semibold text-slate-300 block mb-1">Explanation</label>
               <textarea
-                rows={3}
+                rows={10}
                 value={editQuestion.explanation}
                 onChange={(e) => setEditQuestion({ ...editQuestion, explanation: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100"
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 leading-relaxed"
               />
             </div>
+
+            <div className="space-y-2">
+              <label className="font-semibold text-slate-300 block">Why each wrong option is wrong</label>
+              {(['A', 'B', 'C', 'D', 'E'] as OptionKey[])
+                .filter((k) => (editQuestion.options as any)[k] && k !== editQuestion.correctAnswer)
+                .map((k) => (
+                  <div key={k}>
+                    <span className="text-[11px] text-rose-300 font-bold block mb-1">
+                      {k}. {(editQuestion.options as any)[k]}
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={(editQuestion.optionExplanations as any)?.[k] || ''}
+                      onChange={(e) =>
+                        setEditQuestion({
+                          ...editQuestion,
+                          optionExplanations: { ...((editQuestion.optionExplanations as any) || {}), [k]: e.target.value }
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 leading-relaxed"
+                    />
+                  </div>
+                ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-slate-300 font-semibold">
+              <input
+                type="checkbox"
+                checked={!!editQuestion.needsReview}
+                onChange={(e) => setEditQuestion({ ...editQuestion, needsReview: e.target.checked })}
+              />
+              <span>Needs review</span>
+            </label>
+            {editQuestion.reviewNote && (
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200">
+                {editQuestion.reviewNote}
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
               <button
