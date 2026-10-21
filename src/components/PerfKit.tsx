@@ -19,6 +19,15 @@ export const PerfStyles: React.FC = () => (
       100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); }
     }
     @keyframes pf-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    @keyframes pf-sheet { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes pf-fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes pf-check { 0% { transform: scale(0) rotate(-40deg); } 70% { transform: scale(1.25) rotate(8deg); } 100% { transform: scale(1) rotate(0); } }
+    .pf-sheet { animation: pf-sheet .32s cubic-bezier(.2,.8,.2,1) both; }
+    .pf-fade { animation: pf-fade .25s ease both; }
+    .pf-check { animation: pf-check .35s cubic-bezier(.2,.9,.3,1.2) both; }
+    .pf-lift { transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+    .pf-lift:hover { transform: translateY(-2px); }
+    .pf-lift:active { transform: scale(.97); }
     .pf-rise { animation: pf-rise .6s cubic-bezier(.2,.8,.2,1) both; }
     .pf-pop { animation: pf-pop .5s cubic-bezier(.2,.9,.3,1.2) both; }
     .pf-shimmer {
@@ -28,6 +37,7 @@ export const PerfStyles: React.FC = () => (
     @media (prefers-reduced-motion: reduce) {
       .pf-rise, .pf-pop, .pf-shimmer { animation: none !important; }
       [data-pf-anim] { animation: none !important; transition: none !important; }
+      .pf-sheet, .pf-fade, .pf-check { animation: none !important; }
     }
   `}</style>
 );
