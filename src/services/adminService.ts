@@ -467,3 +467,101 @@ export const disableAllSubscriptionsInSupabase = async (): Promise<{ success: bo
 export { getAdminConfig, saveAdminConfig };
 
 
+
+// ---------------------------------------------------------------------------
+// User feedback (reports) on questions, flashcards and Most Common cards
+// ---------------------------------------------------------------------------
+
+export type FeedbackKind = 'question' | 'flashcard' | 'most_common';
+
+export interface FeedbackItem {
+  id: string;
+  kind: FeedbackKind;
+  itemId: string;
+  preview: string | null;
+  answerPreview: string | null;
+  context: string | null;
+  exists: boolean;
+  message: string | null;
+  reporterName: string;
+  resolved: boolean;
+  createdAt: string;
+}
+
+const feedbackHeaders = (): Record<string, string> => {
+  const user = getCurrentUser();
+  return {
+    'Content-Type': 'application/json',
+    'x-telegram-user-id': user.telegramId || '',
+    'x-telegram-username': user.username || ''
+  };
+};
+
+export const fetchAllFeedback = async (): Promise<FeedbackItem[]> => {
+  const headers = feedbackHeaders();
+  const [qRes, fRes] = await Promise.all([
+    fetch('/api/admin/question-feedback', { headers }).catch(() => null),
+    fetch('/api/admin/flashcard-feedback', { headers }).catch(() => null)
+  ]);
+
+  const items: FeedbackItem[] = [];
+
+  if (qRes && qRes.ok) {
+    const data = await qRes.json().catch(() => ({}));
+    for (const r of data.feedback || []) {
+      items.push({
+        id: String(r.id),
+        kind: 'question',
+        itemId: String(r.questionId),
+        preview: r.questionPreview || null,
+        answerPreview: null,
+        context: [r.questionMajor, r.questionTopic, r.questionYear].filter(Boolean).join(' · ') || null,
+        exists: r.questionExists !== false,
+        message: r.message || null,
+        reporterName: r.reporterName || 'Unknown',
+        resolved: Boolean(r.resolved),
+        createdAt: r.createdAt
+      });
+    }
+  } else if (qRes && qRes.status === 403) {
+    throw new Error('Administrator privileges required.');
+  }
+
+  if (fRes && fRes.ok) {
+    const data = await fRes.json().catch(() => ({}));
+    for (const r of data.feedback || []) {
+      items.push({
+        id: String(r.id),
+        kind: r.cardType === 'most_common' ? 'most_common' : 'flashcard',
+        itemId: String(r.flashcardId),
+        preview: r.flashcardQuestionPreview || null,
+        answerPreview: r.flashcardAnswerPreview || null,
+        context: null,
+        exists: r.cardExists !== false,
+        message: r.message || null,
+        reporterName: r.reporterName || 'Unknown',
+        resolved: Boolean(r.resolved),
+        createdAt: r.createdAt
+      });
+    }
+  }
+
+  items.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return items;
+};
+
+export const setFeedbackResolved = async (
+  item: Pick<FeedbackItem, 'id' | 'kind'>,
+  resolved: boolean
+): Promise<void> => {
+  const base = item.kind === 'question' ? 'question-feedback' : 'flashcard-feedback';
+  const response = await fetch(`/api/admin/${base}/${encodeURIComponent(item.id)}/resolve`, {
+    method: 'POST',
+    headers: feedbackHeaders(),
+    body: JSON.stringify({ resolved })
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to update feedback status.');
+  }
+};
