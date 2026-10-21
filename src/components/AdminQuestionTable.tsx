@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Search,
   Filter,
@@ -30,11 +30,17 @@ import {
 interface AdminQuestionTableProps {
   adminUserId: string;
   onRefreshStats?: () => void;
+  // Set when the admin clicked "Open & edit" on a user report: the table
+  // jumps straight to that question's edit form.
+  focusQuestionId?: string | null;
+  onFocusHandled?: () => void;
 }
 
 export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
   adminUserId,
-  onRefreshStats
+  onRefreshStats,
+  focusQuestionId,
+  onFocusHandled
 }) => {
   const [questions, setQuestions] = useState<Question[]>(getStoredQuestions());
 
@@ -67,6 +73,26 @@ export const AdminQuestionTable: React.FC<AdminQuestionTableProps> = ({
     correctAnswer: 'A',
     explanation: ''
   });
+
+  useEffect(() => {
+    if (!focusQuestionId) return;
+    const fresh = getStoredQuestions();
+    setQuestions(fresh);
+    const target = fresh.find((q) => String(q.id) === String(focusQuestionId));
+    setSearchQuery(String(focusQuestionId));
+    setSelectedBank('All');
+    setSelectedYear('All');
+    setSelectedMajor('All');
+    setSelectedClassification('All');
+    if (target) {
+      setEditQuestion({ ...target });
+      setActionError(null);
+    } else {
+      setActionError(`Question ${focusQuestionId} was not found in the local directory. Try "Sync" or search for it.`);
+    }
+    onFocusHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusQuestionId]);
 
   const reloadData = () => {
     const updated = getStoredQuestions();
