@@ -8,7 +8,8 @@ import {
   X,
   CheckCircle2,
   ListPlus,
-  AlertTriangle
+  AlertTriangle,
+  Search
 } from 'lucide-react';
 import {
   getFlashcards,
@@ -24,7 +25,14 @@ import { Flashcard } from '../types';
 // so it's stored and displayed completely separately from regular
 // Flashcards, with a different (fill-in-the-blank) reveal style on the
 // student side.
-export const AdminMostCommonManager: React.FC = () => {
+interface AdminMostCommonManagerProps {
+  // Set when the admin opened a card from a user report: jump to its edit form.
+  focusCardId?: string | null;
+  onFocusHandled?: () => void;
+}
+
+export const AdminMostCommonManager: React.FC<AdminMostCommonManagerProps> = ({ focusCardId, onFocusHandled }) => {
+  const [search, setSearch] = useState<string>('');
   const [cards, setCards] = useState<Flashcard[]>(getFlashcards('most_common'));
   const [editingId, setEditingId] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
@@ -113,6 +121,27 @@ export const AdminMostCommonManager: React.FC = () => {
     setQuestion(card.question);
     setAnswer(card.answer);
   };
+
+  useEffect(() => {
+    if (!focusCardId) return;
+    const target = cards.find((c) => c.id === focusCardId);
+    if (target) {
+      handleEdit(target);
+      setSearch(target.question.slice(0, 60));
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+      onFocusHandled?.();
+    } else if (cards.length > 0) {
+      // Cards finished loading but this one is missing (deleted?).
+      onFocusHandled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusCardId, cards]);
+
+  const visibleCards = cards.filter((c) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return c.question.toLowerCase().includes(q) || c.answer.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
+  });
 
   const handleCancel = () => {
     setEditingId(null);
@@ -268,8 +297,29 @@ A: The rectosigmoid region.`}</pre>
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <h3 className="text-sm font-bold uppercase tracking-wider text-slate-100 flex items-center gap-2">
             <span>Existing Most Common Cards</span>
-            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">{cards.length}</span>
+            <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-xs font-semibold">{search.trim() ? `${visibleCards.length} / ${cards.length}` : cards.length}</span>
           </h3>
+        </div>
+
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by question, answer or ID…"
+            className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-2.5 top-2.5 p-0.5 rounded text-slate-500 hover:text-slate-200"
+              title="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {cards.length === 0 ? (
@@ -278,6 +328,9 @@ A: The rectosigmoid region.`}</pre>
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {visibleCards.length === 0 && (
+              <div className="py-8 text-center text-xs text-slate-500">No cards match your search.</div>
+            )}
             <table className="w-full text-left text-xs text-slate-300">
               <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800">
                 <tr>
@@ -287,7 +340,7 @@ A: The rectosigmoid region.`}</pre>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {cards.map((card) => (
+                {visibleCards.map((card) => (
                   <tr key={card.id} className={`hover:bg-slate-800/40 transition-colors ${editingId === card.id ? 'bg-amber-500/10' : ''}`}>
                     <td className="px-4 py-3.5 align-top font-medium text-slate-100 max-w-xs leading-relaxed">{card.question}</td>
                     <td className="px-4 py-3.5 align-top text-slate-300 max-w-xs leading-relaxed">{card.answer}</td>
