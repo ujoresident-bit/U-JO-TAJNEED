@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Eye, Sparkles } from 'lucide-react';
 import { getFlashcards, syncFlashcardsFromSupabase } from '../services/flashcardService';
 import { Flashcard } from '../types';
+import { FeedbackButton } from './FeedbackButton';
 
 interface MostCommonViewProps {
   onNavigate: (view: string, params?: any) => void;
@@ -68,9 +69,12 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
       </div>
 
       <div className="glass-panel p-6 sm:p-8 space-y-6 border-l-4 border-amber-500">
-        <div className="flex items-center gap-2 text-amber-400 text-[11px] font-bold uppercase tracking-widest">
-          <Sparkles className="w-4 h-4" />
-          <span>Most Common</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-amber-400 text-[11px] font-bold uppercase tracking-widest">
+            <Sparkles className="w-4 h-4" />
+            <span>Most Common</span>
+          </div>
+          <FeedbackButton kind="most_common" itemId={current.id} />
         </div>
 
         <p className="text-slate-100 text-base leading-relaxed">{current.question}</p>
