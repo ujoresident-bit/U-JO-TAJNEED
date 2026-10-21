@@ -1034,6 +1034,8 @@ async function startServer() {
 
       const row = {
         id: String(qObj.id).trim(),
+        // bank_id is NOT NULL in Supabase; never omit it.
+        bank_id: String(qObj.bankId || qObj.bank_id || 'human_medicine').trim(),
         question: String(qObj.question).trim(),
         option_a: String(opts.A || '').trim(),
         option_b: String(opts.B || '').trim(),
@@ -1117,7 +1119,22 @@ async function startServer() {
         is_most_common: Boolean(qObj.isMostCommon ?? qObj.is_most_common ?? false)
       };
 
-      const { data, error } = await supabase.from('questions').upsert([row], { onConflict: 'id' }).select();
+      // Update the existing row in place. (A plain upsert re-validates NOT NULL
+      // columns such as bank_id on the proposed INSERT row and failed with
+      // 'null value in column "bank_id"'.) bank_id is only touched when the
+      // client actually sent one.
+      const incomingBank = qObj.bankId || qObj.bank_id;
+      const { id: _omitId, ...patch } = row as any;
+      if (incomingBank) patch.bank_id = String(incomingBank).trim();
+
+      let { data, error } = await supabase.from('questions').update(patch).eq('id', qId).select();
+      if (!error && (!data || data.length === 0)) {
+        // Row not found: create it, with a bank_id so the insert is valid.
+        const insertRow = { ...row, bank_id: String(incomingBank || 'human_medicine').trim() };
+        const created = await supabase.from('questions').upsert([insertRow], { onConflict: 'id' }).select();
+        data = created.data;
+        error = created.error;
+      }
       if (error) {
         console.error("Error updating question in Supabase:", error.message);
         return res.status(500).json({ error: error.message });
