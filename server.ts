@@ -1629,10 +1629,12 @@ async function startServer() {
       const supabase = getSupabase();
       let cardSnapshot: any = null;
       if (supabase) {
+        // The client only knows the card's permanent custom_id, so look it
+        // up by that (fall back to the raw row id for older callers).
         const { data } = await supabase
           .from('flashcards')
-          .select('id, question, answer')
-          .eq('id', flashcardId)
+          .select('id, custom_id, question, answer, card_type')
+          .eq('custom_id', flashcardId)
           .maybeSingle();
         cardSnapshot = data;
       }
@@ -1668,7 +1670,7 @@ async function startServer() {
           : '(flashcard text unavailable)';
 
         const notificationMessage =
-          `⚠️ <b>إبلاغ عن مشكلة بفلاش كارد</b>\n\n` +
+          `⚠️ <b>إبلاغ عن مشكلة ب${cardSnapshot?.card_type === 'most_common' ? 'بطاقة Most Common' : 'فلاش كارد'}</b>\n\n` +
           `🆔 <b>Flashcard ID:</b> <code>${flashcardId}</code>\n` +
           `📝 <b>السؤال:</b> ${questionPreview}\n\n` +
           `👤 <b>المستخدم المُبلِّغ:</b> ${reporterLabel}\n` +
@@ -3132,9 +3134,9 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
       if (flashcardIds.length > 0) {
         const { data: cRows } = await supabase
           .from('flashcards')
-          .select('id, question, answer')
-          .in('id', flashcardIds);
-        (cRows || []).forEach((c: any) => cardMap.set(String(c.id), c));
+          .select('id, custom_id, question, answer, card_type')
+          .in('custom_id', flashcardIds);
+        (cRows || []).forEach((c: any) => cardMap.set(String(c.custom_id), c));
       }
 
       const userIds = Array.from(new Set((feedbackRows || []).map((r: any) => r.user_id).filter(Boolean)));
@@ -3153,6 +3155,8 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
         return {
           id: row.id,
           flashcardId: row.flashcard_id,
+          cardType: c?.card_type === 'most_common' ? 'most_common' : 'flashcard',
+          cardExists: Boolean(c),
           flashcardQuestionPreview: c?.question ? String(c.question).slice(0, 200) : null,
           flashcardAnswerPreview: c?.answer ? String(c.answer).slice(0, 200) : null,
           message: row.message || null,
@@ -3270,6 +3274,7 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
         return {
           id: row.id,
           questionId: row.question_id,
+          questionExists: Boolean(q),
           questionPreview: q?.question ? String(q.question).slice(0, 200) : null,
           questionMajor: q?.major || null,
           questionTopic: q?.topic || null,
