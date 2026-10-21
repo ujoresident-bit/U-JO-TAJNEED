@@ -11,6 +11,7 @@ import {
 import { getFlashcards, syncFlashcardsFromSupabase } from '../services/flashcardService';
 import { Flashcard } from '../types';
 import { recordReview } from '../services/reviewService';
+import { FeedbackButton } from './FeedbackButton';
 
 interface FlashcardsViewProps {
   onNavigate: (view: string) => void;
@@ -151,6 +152,10 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="w-full max-w-2xl flex justify-end -mt-2">
+            <FeedbackButton kind="flashcard" itemId={currentCard.id} />
           </div>
 
           {/* Spaced-repetition self-check: missed cards return after 1 day, 3 days, 7 days */}
