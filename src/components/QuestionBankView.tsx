@@ -15,8 +15,11 @@ import {
   X,
   HelpCircle,
   CheckCircle2,
-  Clock
+  Clock,
+  Search,
+  ChevronRight
 } from 'lucide-react';
+import { PerfStyles, CountUp } from './PerfKit';
 import {
   getQuestionBankMeta,
   getFilteredQuestions,
@@ -44,6 +47,135 @@ interface QuestionBankViewProps {
   onNavigate: (view: string, params?: any) => void;
   bankId?: string;
 }
+
+// Searchable multi-select sheet for topics (there can be hundreds of them).
+const TopicPicker: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  topics: string[];
+  counts: Record<string, number>;
+  selected: string[];
+  onToggle: (t: string) => void;
+  onClear: () => void;
+}> = ({ open, onClose, topics, counts, selected, onToggle, onClear }) => {
+  const [query, setQuery] = useState('');
+  useEffect(() => { if (open) setQuery(''); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [open, onClose]);
+
+  const q = query.trim().toLowerCase();
+  const list = useMemo(() => {
+    const base = q ? topics.filter((t) => t.toLowerCase().includes(q)) : topics;
+    return [...base].sort((a, b) => {
+      const sa = selected.includes(a) ? 0 : 1;
+      const sb = selected.includes(b) ? 0 : 1;
+      return sa - sb || a.localeCompare(b);
+    });
+  }, [topics, q, selected]);
+
+  if (!open) return null;
+  const isAll = selected.includes('All');
+  const selCount = isAll ? 0 : selected.length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-label="Choose topics">
+      <div className="pf-fade absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+      <div className="pf-sheet relative w-full sm:max-w-lg max-h-[86vh] flex flex-col rounded-t-3xl sm:rounded-3xl border border-white/10 bg-[#0b1016] shadow-2xl">
+        <div className="p-5 pb-3 space-y-3 border-b border-white/[0.07]">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-white">Choose topics</h3>
+              <p className="text-[11px] text-slate-500">{topics.length} topics available</p>
+            </div>
+            <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors" aria-label="Close">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search topics..."
+              className="w-full pl-10 pr-9 py-3 rounded-xl bg-white/[0.05] border border-white/[0.08] focus:border-purple-400/60 focus:bg-white/[0.07] outline-none text-sm text-slate-100 placeholder:text-slate-600 transition-colors"
+            />
+            {query && (
+              <button onClick={() => setQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-500 hover:text-white" aria-label="Clear search">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          {selCount > 0 && (
+            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+              {selected.map((t) => (
+                <button key={t} onClick={() => onToggle(t)} className="pf-pop inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-400/40 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/30">
+                  <span className="max-w-[10rem] truncate">{t}</span><X className="w-3 h-3" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2">
+          {!q && (
+            <button
+              onClick={onClear}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors ${isAll ? 'bg-purple-500/15 border border-purple-400/40' : 'hover:bg-white/[0.05] border border-transparent'}`}
+            >
+              <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${isAll ? 'bg-purple-400 border-purple-300' : 'border-white/20'}`}>
+                {isAll && <Check className="w-3.5 h-3.5 text-slate-950 pf-check" />}
+              </span>
+              <span className="flex-1 text-sm font-semibold text-slate-100">All topics</span>
+            </button>
+          )}
+          {list.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-500">No topics match "{query}".</div>
+          ) : (
+            list.map((t) => {
+              const on = !isAll && selected.includes(t);
+              return (
+                <button
+                  key={t}
+                  onClick={() => onToggle(t)}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors border ${on ? 'bg-purple-500/15 border-purple-400/40' : 'border-transparent hover:bg-white/[0.05]'}`}
+                >
+                  <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${on ? 'bg-purple-400 border-purple-300' : 'border-white/20'}`}>
+                    {on && <Check className="w-3.5 h-3.5 text-slate-950 pf-check" />}
+                  </span>
+                  <span className="flex-1 text-sm text-slate-200">{t}</span>
+                  <span className="text-[11px] tabular-nums text-slate-500 px-2 py-0.5 rounded-full bg-white/[0.05]">{counts[t] ?? 0}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <div className="p-4 border-t border-white/[0.07] flex items-center gap-3">
+          <button
+            onClick={onClear}
+            disabled={isAll}
+            className="px-4 py-3 rounded-xl text-xs font-semibold text-slate-300 border border-white/10 hover:bg-white/5 disabled:opacity-40 transition-colors"
+          >
+            Clear
+          </button>
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-black uppercase tracking-wider shadow-lg shadow-purple-500/25 active:scale-[.98] transition-all"
+          >
+            {isAll ? 'Done' : `Done · ${selCount} selected`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, bankId = 'moh_bank' }) => {
   const canonicalUser = getCurrentUser();
@@ -154,6 +286,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [questionCount, setQuestionCount] = useState<number>(10);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [topicSheetOpen, setTopicSheetOpen] = useState<boolean>(false);
 
   // Reset Progress state
   const [resetCount, setResetCount] = useState<number>(0);
@@ -453,8 +586,9 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
 
   return (
     <div className="space-y-6 pb-12">
+      <PerfStyles />
       {/* Header Banner */}
-      <div className="glass-panel p-6 relative overflow-hidden">
+      <div className="pf-rise glass-panel p-6 relative overflow-hidden" style={{ background: 'radial-gradient(520px 200px at 0% 0%, rgba(34,211,238,.10), transparent 70%), var(--surface)' }}>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-[#00F2FF] text-[10px] font-semibold uppercase tracking-wider">
@@ -576,7 +710,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setSelectedStatusFilter('ALL')}
-          className={`p-4 rounded-2xl text-left transition-all cursor-pointer relative overflow-hidden border ${
+          style={{ animationDelay: '0.08s' }}
+          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
             selectedStatusFilter === 'ALL'
               ? 'bg-cyan-500/20 border-cyan-400 ring-2 ring-cyan-400/50 shadow-lg shadow-cyan-500/20'
               : 'glass-panel border-cyan-500/20 opacity-75 hover:opacity-100 hover:border-cyan-500/50'
@@ -594,7 +729,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <BookOpen className="w-4 h-4 text-[#00F2FF]" />
           </div>
           <div className="text-2xl font-black text-[#00F2FF]">
-            {statusCounts.allCount}
+            <CountUp value={statusCounts.allCount} duration={900} />
           </div>
           <div className="text-[10px] text-slate-400 font-medium mt-1">
             All matching current filters
@@ -605,7 +740,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setSelectedStatusFilter('COMPLETE')}
-          className={`p-4 rounded-2xl text-left transition-all cursor-pointer relative overflow-hidden border ${
+          style={{ animationDelay: '0.15s' }}
+          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
             selectedStatusFilter === 'COMPLETE'
               ? 'bg-emerald-500/20 border-emerald-400 ring-2 ring-emerald-400/50 shadow-lg shadow-emerald-500/20'
               : 'glass-panel border-emerald-500/20 opacity-75 hover:opacity-100 hover:border-emerald-500/50'
@@ -623,7 +759,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-black text-emerald-400">
-            {statusCounts.completeCount}
+            <CountUp value={statusCounts.completeCount} duration={900} />
           </div>
           <div className="text-[10px] text-slate-400 font-medium mt-1">
             Questions answered in bank
@@ -634,7 +770,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setSelectedStatusFilter('UNCOMPLETED')}
-          className={`p-4 rounded-2xl text-left transition-all cursor-pointer relative overflow-hidden border ${
+          style={{ animationDelay: '0.22s' }}
+          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
             selectedStatusFilter === 'UNCOMPLETED'
               ? 'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/50 shadow-lg shadow-amber-500/20'
               : 'glass-panel border-amber-500/20 opacity-75 hover:opacity-100 hover:border-amber-500/50'
@@ -652,7 +789,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <Clock className="w-4 h-4 text-amber-400" />
           </div>
           <div className="text-2xl font-black text-amber-400">
-            {statusCounts.uncompletedCount}
+            <CountUp value={statusCounts.uncompletedCount} duration={900} />
           </div>
           <div className="text-[10px] text-slate-400 font-medium mt-1">
             Encountered but unanswered
@@ -663,7 +800,8 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         <button
           type="button"
           onClick={() => setSelectedStatusFilter('UNUSED')}
-          className={`p-4 rounded-2xl text-left transition-all cursor-pointer relative overflow-hidden border ${
+          style={{ animationDelay: '0.29s' }}
+          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
             selectedStatusFilter === 'UNUSED'
               ? 'bg-purple-500/20 border-purple-400 ring-2 ring-purple-400/50 shadow-lg shadow-purple-500/20'
               : 'glass-panel border-purple-500/20 opacity-75 hover:opacity-100 hover:border-purple-500/50'
@@ -681,7 +819,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <HelpCircle className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-2xl font-black text-purple-400">
-            {statusCounts.unusedCount}
+            <CountUp value={statusCounts.unusedCount} duration={900} />
           </div>
           <div className="text-[10px] text-slate-400 font-medium mt-1">
             Never started or encountered
@@ -792,7 +930,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         {/* Left 2 Columns: Filter Selectors */}
         <div className="lg:col-span-2 space-y-6">
           {/* Major Filter */}
-          <div className="glass-panel p-5 space-y-3">
+          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.05s' }}>
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                 <Sliders className="w-4 h-4 text-[#00F2FF]" />
@@ -806,7 +944,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => handleToggleMajor('All')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 pf-lift ${
                   selectedMajors.includes('All')
                     ? 'neon-bg font-black'
                     : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
@@ -823,7 +961,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                   <button
                     key={m.name}
                     onClick={() => handleToggleMajor(m.name)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer pf-lift ${
                       isSelected
                         ? 'neon-bg font-black'
                         : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
@@ -838,56 +976,64 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             </div>
           </div>
 
-          {/* Topic Filter */}
-          <div className="glass-panel p-5 space-y-3">
+          {/* Topic Filter: a single button that opens a searchable picker */}
+          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.1s' }}>
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                 <Filter className="w-4 h-4 text-purple-400" />
                 <span>Sub-Topic (Multi-Select)</span>
               </label>
-              <span className="text-xs text-slate-400 font-medium truncate max-w-[200px]">
-                {selectedTopicsLabel}
-              </span>
+              <span className="text-[11px] text-slate-500 tabular-nums">{availableTopics.length} topics</span>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => handleToggleTopic('All')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 ${
-                  selectedTopics.includes('All')
-                    ? 'bg-purple-500 text-slate-950 border-purple-400 font-black shadow-md shadow-purple-500/20'
-                    : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                }`}
-              >
-                {selectedTopics.includes('All') && <Check className="w-3.5 h-3.5" />}
-                <span>All Topics</span>
-              </button>
+            <button
+              type="button"
+              onClick={() => setTopicSheetOpen(true)}
+              className="pf-lift w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white/[0.04] border border-white/[0.09] hover:border-purple-400/50 hover:bg-purple-500/[0.06] text-left cursor-pointer"
+            >
+              <span className="w-9 h-9 rounded-lg bg-purple-500/15 border border-purple-400/25 text-purple-300 flex items-center justify-center shrink-0">
+                <Search className="w-4 h-4" />
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-semibold text-slate-100">
+                  {selectedTopics.includes('All') ? 'All topics' : `${selectedTopics.length} topic${selectedTopics.length === 1 ? '' : 's'} selected`}
+                </span>
+                <span className="block text-[11px] text-slate-500 truncate">
+                  {selectedTopics.includes('All') ? 'Tap to search and pick specific topics' : selectedTopics.join(', ')}
+                </span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+            </button>
 
-              {availableTopics.map((t) => {
-                const isSelected = selectedTopics.includes(t) && !selectedTopics.includes('All');
-                const tCount = topicQuestionCounts[t] ?? 0;
-                return (
+            {!selectedTopics.includes('All') && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedTopics.slice(0, 8).map((t) => (
                   <button
                     key={t}
                     onClick={() => handleToggleTopic(t)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                      isSelected
-                        ? 'bg-purple-500 text-slate-950 border-purple-400 font-black shadow-md shadow-purple-500/20'
-                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                    }`}
+                    className="pf-pop inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/15 border border-purple-400/35 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/25 cursor-pointer"
                   >
-                    {isSelected && <Check className="w-3.5 h-3.5 text-slate-950" />}
-                    <span>{t}</span>
-                    <span className="text-[10px] opacity-80">({tCount})</span>
+                    <span className="max-w-[11rem] truncate">{t}</span><X className="w-3 h-3" />
                   </button>
-                );
-              })}
-            </div>
+                ))}
+                {selectedTopics.length > 8 && <span className="text-[11px] text-slate-500 self-center">+{selectedTopics.length - 8} more</span>}
+              </div>
+            )}
           </div>
+
+          <TopicPicker
+            open={topicSheetOpen}
+            onClose={() => setTopicSheetOpen(false)}
+            topics={availableTopics}
+            counts={topicQuestionCounts}
+            selected={selectedTopics}
+            onToggle={handleToggleTopic}
+            onClear={() => setSelectedTopics(['All'])}
+          />
 
           {/* Exam Type (TAJNEED / MADANI) — separate from the years list */}
           {bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0 && (
-          <div className="glass-panel p-5 space-y-3">
+          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.15s' }}>
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan-400" />
@@ -919,7 +1065,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
 
           {/* Exam Year Multi-Select — years that belong to the chosen type */}
           {bankId !== 'usmle_bank' && (
-          <div className="glass-panel p-5 space-y-3">
+          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.2s' }}>
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                 <Calendar className="w-4 h-4 text-emerald-400" />
@@ -956,7 +1102,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
           )}
 
           {/* Difficulty Filter */}
-          <div className="glass-panel p-5 space-y-3">
+          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.25s' }}>
             <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
               <Layers className="w-4 h-4 text-amber-400" />
               <span>Difficulty Level</span>
@@ -982,7 +1128,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
 
         {/* Right Column: Block Summary & Action */}
         <div className="space-y-6">
-          <div className="glass-panel p-6 space-y-5 sticky top-20 shadow-xl">
+          <div className="pf-rise glass-panel p-6 space-y-5 sticky top-20 shadow-xl" style={{ animationDelay: '.2s' }}>
             <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 pb-2 border-b border-white/10">
               Block Configuration
             </h3>
@@ -991,7 +1137,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-2">
               <div className="text-[10px] uppercase font-bold text-slate-400">Matching Questions</div>
               <div className="text-3xl font-black text-[#00F2FF] flex items-baseline gap-2">
-                <span>{matchingQuestions.length}</span>
+                <span><CountUp value={matchingQuestions.length} duration={600} /></span>
                 <span className="text-xs font-normal text-slate-400">Questions</span>
               </div>
             </div>
@@ -1063,7 +1209,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
                   ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
                   : !isSubscribed
                   ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20'
-                  : 'neon-bg'
+                  : 'neon-bg pf-shimmer'
               }`}
             >
               {subscriptionLoading ? (
