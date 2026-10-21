@@ -27,6 +27,7 @@ import {
 import { ExplanationPanel } from './ExplanationPanel';
 import { QuestionNavigator } from './QuestionNavigator';
 import { EndBlockModal } from './EndBlockModal';
+import { FeedbackButton } from './FeedbackButton';
 import { BlockSummaryView } from './BlockSummaryView';
 
 interface QuestionScreenProps {
@@ -379,12 +380,15 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
             </span>
           </div>
 
-          {isHighlightMode && (
-            <div className="text-[10px] text-amber-300 font-bold bg-amber-400/10 px-2 py-0.5 rounded-md border border-amber-400/30 flex items-center gap-1">
-              <Highlighter className="w-3 h-3" />
-              <span>Select stem text to auto-highlight</span>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            {isHighlightMode && (
+              <div className="text-[10px] text-amber-300 font-bold bg-amber-400/10 px-2 py-0.5 rounded-md border border-amber-400/30 flex items-center gap-1">
+                <Highlighter className="w-3 h-3" />
+                <span>Select stem text to auto-highlight</span>
+              </div>
+            )}
+            <FeedbackButton kind="question" itemId={currentQuestion.id} />
+          </div>
         </div>
 
         {/* Question Text Stem with Selection Capture */}
