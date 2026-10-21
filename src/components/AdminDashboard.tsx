@@ -21,7 +21,8 @@ import {
   Trash2,
   Clapperboard,
   Sparkles,
-  Brain
+  Brain,
+  Flag
 } from 'lucide-react';
 import {
   getDashboardMetrics,
@@ -59,6 +60,8 @@ import { AdminQuestionStats } from './AdminQuestionStats';
 import { AdminFlashcardsManager } from './AdminFlashcardsManager';
 import { AdminVideoManager } from './AdminVideoManager';
 import { AdminMostCommonManager } from './AdminMostCommonManager';
+import { AdminFeedbackManager } from './AdminFeedbackManager';
+import { fetchAllFeedback } from '../services/adminService';
 import { AdminStudyContentManager } from './AdminStudyContentManager';
 
 interface AdminDashboardProps {
@@ -89,7 +92,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
       </div>
     );
   }
-  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'most_common' | 'smart_first_aid' | 'videos' | 'config'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'most_common' | 'smart_first_aid' | 'videos' | 'feedback' | 'config'>('overview');
+  // Feedback inbox: unresolved count (tab badge) and the item the admin
+  // asked to open for editing from a report.
+  const [feedbackOpenCount, setFeedbackOpenCount] = useState<number>(0);
+  const [focusQuestionId, setFocusQuestionId] = useState<string | null>(null);
+  const [focusCardId, setFocusCardId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchAllFeedback()
+      .then((all) => setFeedbackOpenCount(all.filter((i) => !i.resolved).length))
+      .catch(() => {});
+  }, []);
+
+  const openFeedbackItem = (kind: 'question' | 'flashcard' | 'most_common', itemId: string) => {
+    if (kind === 'question') {
+      setFocusQuestionId(itemId);
+      setBankSubTab('directory');
+      setActiveTab('bank');
+    } else {
+      setFocusCardId(itemId);
+      setActiveTab(kind === 'most_common' ? 'most_common' : 'flashcards');
+    }
+  };
   const [bankSubTab, setBankSubTab] = useState<'directory' | 'import' | 'stats'>('directory');
 
   // Metrics state (integrated with live Supabase telemetry)
@@ -336,6 +361,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
           { id: 'most_common', label: 'Most Common', icon: Sparkles },
           { id: 'smart_first_aid', label: 'Smart First Aid', icon: Brain },
           { id: 'videos', label: 'Videos', icon: Clapperboard },
+          { id: 'feedback', label: 'Feedback', icon: Flag, badge: feedbackOpenCount },
           { id: 'config', label: 'System Config', icon: Settings }
         ].map((tab) => {
           const Icon = tab.icon;
@@ -727,6 +753,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
           {bankSubTab === 'directory' && (
             <AdminQuestionTable
               adminUserId={adminUser.telegramId || adminUser.username}
+              focusQuestionId={focusQuestionId}
+              onFocusHandled={() => setFocusQuestionId(null)}
             />
           )}
 
@@ -745,8 +773,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
       )}
 
       {/* Tab 5: Flashcards */}
-      {activeTab === 'flashcards' && <AdminFlashcardsManager />}
-      {activeTab === 'most_common' && <AdminMostCommonManager />}
+      {activeTab === 'flashcards' && (
+        <AdminFlashcardsManager focusCardId={focusCardId} onFocusHandled={() => setFocusCardId(null)} />
+      )}
+      {activeTab === 'most_common' && (
+        <AdminMostCommonManager focusCardId={focusCardId} onFocusHandled={() => setFocusCardId(null)} />
+      )}
+      {activeTab === 'feedback' && (
+        <AdminFeedbackManager onOpenItem={openFeedbackItem} onUnresolvedCount={setFeedbackOpenCount} />
+      )}
       {activeTab === 'smart_first_aid' && <AdminStudyContentManager />}
       {activeTab === 'videos' && <AdminVideoManager />}
 
