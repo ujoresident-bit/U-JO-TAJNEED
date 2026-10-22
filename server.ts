@@ -5842,7 +5842,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
       const ids = items.map((i) => Number(i.messageId)).filter((n) => Number.isFinite(n));
       const { data: existingRows } = await supabase
         .from('telegram_videos')
-        .select('tg_message_id, major, topic, match_status')
+        .select('tg_message_id, title, major, topic, match_status')
         .eq('tg_chat_id', chatId)
         .in('tg_message_id', ids);
       const existing = new Map<number, any>((existingRows || []).map((r: any) => [Number(r.tg_message_id), r]));
@@ -5852,8 +5852,10 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
         .filter((i) => Number.isFinite(Number(i.messageId)) && String(i.title || '').trim())
         .map((i, idx) => {
           const mid = Number(i.messageId);
-          const title = String(i.title).trim().slice(0, 300);
+          let title = String(i.title).trim().slice(0, 300);
           const prev = existing.get(mid);
+          // Untitled videos come in as "Video <id>"; never overwrite a title the admin already typed.
+          if (prev && /^Video \d+$/.test(title) && prev.title && !/^Video \d+$/.test(prev.title)) title = prev.title;
           summary.total++;
           if (prev && prev.match_status === 'manual') {
             summary.kept++;
@@ -5933,10 +5935,24 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
       if (req.body?.topic !== undefined) patch.topic = req.body.topic ? String(req.body.topic).trim() : null;
       if (req.body?.major !== undefined || req.body?.topic !== undefined) {
         patch.match_status = patch.topic || patch.major ? 'manual' : 'none';
+      } else if (patch.title) {
+        // Title-only edit: try to match the new title unless the admin already chose a topic by hand.
+        const { data: cur } = await supabase
+          .from('telegram_videos')
+          .select('bank_id, match_status')
+          .eq('id', req.params.id)
+          .maybeSingle();
+        if (cur && cur.match_status !== 'manual') {
+          const topics = await loadBankTopics(supabase, cur.bank_id || 'human_medicine');
+          const m = matchTitle(patch.title, topics);
+          patch.major = m.major || null;
+          patch.topic = m.topic || null;
+          patch.match_status = m.status;
+        }
       }
-      const { error } = await supabase.from('telegram_videos').update(patch).eq('id', req.params.id);
+      const { data: updRows, error } = await supabase.from('telegram_videos').update(patch).eq('id', req.params.id).select();
       if (error) return res.status(500).json({ success: false, error: error.message });
-      return res.json({ success: true });
+      return res.json({ success: true, video: updRows?.[0] || null });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
