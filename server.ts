@@ -5734,17 +5734,9 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
   });
 
   // ==========================================================================
-  // TELEGRAM VIDEOS — explanation videos that live in a Telegram channel.
-  // Each row points at a channel message (chat id + message id) and is linked
-  // to a Major/Topic of the question bank. Students never get a file URL: when
-  // they tap "Watch" the bot copies the channel message into their own chat
-  // (copyMessage) with protect_content so it can't be forwarded or saved.
-  // The bot must be an admin of the channel.
+  // VIDEO <-> QUESTION-BANK TOPIC LINKING
   // ==========================================================================
-  const tgVideoBankByAdmin = new Map<string, string>();
-  const tgTopicsCache = new Map<string, { at: number; list: { major: string; topic: string }[] }>();
-  const tgForwardSessions = new Map<string, { n: number; auto: number; review: number; none: number; manual: number; failed: number; timer: any }>();
-  const requireAdminForTgVideos = (req: express.Request): boolean => {
+  const requireAdminForVideoTools = (req: express.Request): boolean => {
     const id = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
     const un = (req.headers['x-telegram-username'] || req.query.username || '') as string;
     return verifyServerAdminAuthorization(id) || verifyServerAdminAuthorization(un);
@@ -5826,304 +5818,67 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
     return { major: '', topic: '', score: 0, status: 'none' };
   }
 
-  // POST /api/admin/tg-videos/import — body: { bankId, chatId, items:[{messageId,title,durationSeconds}] }
-  app.post("/api/admin/tg-videos/import", async (req, res) => {
+  app.get("/api/admin/video-topics", async (req, res) => {
     try {
-      if (!requireAdminForTgVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
-      const supabase = getSupabase();
-      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
-
-      const bankId = String(req.body?.bankId || 'human_medicine').trim();
-      const chatId = String(req.body?.chatId || '').trim();
-      const items: any[] = Array.isArray(req.body?.items) ? req.body.items : [];
-      if (!/^-?\d+$/.test(chatId)) return res.status(400).json({ success: false, error: "chatId must be the numeric channel id (e.g. -1001234567890)." });
-      if (items.length === 0) return res.status(400).json({ success: false, error: "No videos to import." });
-
-      const topics = await loadBankTopics(supabase, bankId);
-
-      // Keep any manual assignment the admin already made on re-import.
-      const ids = items.map((i) => Number(i.messageId)).filter((n) => Number.isFinite(n));
-      const { data: existingRows } = await supabase
-        .from('telegram_videos')
-        .select('tg_message_id, title, major, topic, match_status')
-        .eq('tg_chat_id', chatId)
-        .in('tg_message_id', ids);
-      const existing = new Map<number, any>((existingRows || []).map((r: any) => [Number(r.tg_message_id), r]));
-
-      const summary = { total: 0, auto: 0, review: 0, none: 0, kept: 0 };
-      const rows = items
-        .filter((i) => Number.isFinite(Number(i.messageId)) && String(i.title || '').trim())
-        .map((i, idx) => {
-          const mid = Number(i.messageId);
-          let title = String(i.title).trim().slice(0, 300);
-          const prev = existing.get(mid);
-          // Untitled videos come in as "Video <id>"; never overwrite a title the admin already typed.
-          if (prev && /^Video \d+$/.test(title) && prev.title && !/^Video \d+$/.test(prev.title)) title = prev.title;
-          summary.total++;
-          if (prev && prev.match_status === 'manual') {
-            summary.kept++;
-            return {
-              tg_chat_id: chatId, tg_message_id: mid, bank_id: bankId, title,
-              duration_seconds: Number(i.durationSeconds) || null,
-              major: prev.major, topic: prev.topic, match_status: 'manual',
-              sort_order: idx
-            };
-          }
-          const m = matchTitle(title, topics);
-          (summary as any)[m.status]++;
-          return {
-            tg_chat_id: chatId, tg_message_id: mid, bank_id: bankId, title,
-            duration_seconds: Number(i.durationSeconds) || null,
-            major: m.major || null, topic: m.topic || null, match_status: m.status,
-            sort_order: idx
-          };
-        });
-
-      for (let k = 0; k < rows.length; k += 200) {
-        const { error } = await supabase
-          .from('telegram_videos')
-          .upsert(rows.slice(k, k + 200), { onConflict: 'tg_chat_id,tg_message_id' });
-        if (error) {
-          console.error('[TG_VIDEOS] import error:', error.message);
-          return res.status(500).json({ success: false, error: error.message });
-        }
-      }
-      return res.json({ success: true, summary, topicsKnown: topics.length });
-    } catch (err: any) {
-      console.error("Error in POST /api/admin/tg-videos/import:", err);
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // GET /api/admin/tg-videos?bankId=&status=&q= — list for review
-  app.get("/api/admin/tg-videos", async (req, res) => {
-    try {
-      if (!requireAdminForTgVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      if (!requireAdminForVideoTools(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
       const supabase = getSupabase();
       if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
       const bankId = String(req.query.bankId || 'human_medicine');
-      const all: any[] = [];
-      for (let from = 0; from < 10000; from += 1000) {
-        const { data, error } = await supabase
-          .from('telegram_videos')
-          .select('*')
-          .eq('bank_id', bankId)
-          .order('sort_order', { ascending: true })
-          .order('tg_message_id', { ascending: true })
-          .range(from, from + 999);
-        if (error) {
-          if (error.code === '42P01') return res.json({ success: true, videos: [], topics: [] });
-          return res.status(500).json({ success: false, error: error.message });
-        }
-        all.push(...(data || []));
-        if (!data || data.length < 1000) break;
-      }
       const topics = await loadBankTopics(supabase, bankId);
-      return res.json({ success: true, videos: all, topics });
+      const { data: cats } = await supabase.from('videos').select('category').eq('bank_id', bankId).not('category', 'is', null);
+      const sections = Array.from(new Set((cats || []).map((r: any) => String(r.category || '').trim()).filter(Boolean))).sort();
+      return res.json({ success: true, topics, sections });
     } catch (err: any) {
-      console.error("Error in GET /api/admin/tg-videos:", err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // PUT /api/admin/tg-videos/:id — manual assignment / rename
-  app.put("/api/admin/tg-videos/:id", async (req, res) => {
+  app.post("/api/admin/videos/suggest", async (req, res) => {
     try {
-      if (!requireAdminForTgVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
+      if (!requireAdminForVideoTools(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
       const supabase = getSupabase();
       if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
-      const patch: any = {};
-      if (req.body?.title !== undefined) patch.title = String(req.body.title).trim().slice(0, 300);
-      if (req.body?.major !== undefined) patch.major = req.body.major ? String(req.body.major).trim() : null;
-      if (req.body?.topic !== undefined) patch.topic = req.body.topic ? String(req.body.topic).trim() : null;
-      if (req.body?.major !== undefined || req.body?.topic !== undefined) {
-        patch.match_status = patch.topic || patch.major ? 'manual' : 'none';
-      } else if (patch.title) {
-        // Title-only edit: try to match the new title unless the admin already chose a topic by hand.
-        const { data: cur } = await supabase
-          .from('telegram_videos')
-          .select('bank_id, match_status')
-          .eq('id', req.params.id)
-          .maybeSingle();
-        if (cur && cur.match_status !== 'manual') {
-          const topics = await loadBankTopics(supabase, cur.bank_id || 'human_medicine');
-          const m = matchTitle(patch.title, topics);
-          patch.major = m.major || null;
-          patch.topic = m.topic || null;
-          patch.match_status = m.status;
-        }
-      }
-      const { data: updRows, error } = await supabase.from('telegram_videos').update(patch).eq('id', req.params.id).select();
-      if (error) return res.status(500).json({ success: false, error: error.message });
-      return res.json({ success: true, video: updRows?.[0] || null });
+      const bankId = String(req.body?.bankId || 'human_medicine');
+      const titles: string[] = Array.isArray(req.body?.titles) ? req.body.titles.map((x: any) => String(x || '')) : [];
+      const topics = await loadBankTopics(supabase, bankId);
+      const suggestions = titles.map((title) => {
+        const m = matchTitle(title, topics);
+        return { major: m.major || '', topic: m.topic || '', status: m.status };
+      });
+      return res.json({ success: true, suggestions });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  // POST /api/admin/tg-videos/bulk-assign — body: { ids:[], major, topic }
-  app.post("/api/admin/tg-videos/bulk-assign", async (req, res) => {
-    try {
-      if (!requireAdminForTgVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
-      const supabase = getSupabase();
-      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
-      const ids: any[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
-      if (ids.length === 0) return res.status(400).json({ success: false, error: "No videos selected." });
-      const major = req.body?.major ? String(req.body.major).trim() : null;
-      const topic = req.body?.topic ? String(req.body.topic).trim() : null;
-      const { error } = await supabase
-        .from('telegram_videos')
-        .update({ major, topic, match_status: major || topic ? 'manual' : 'none' })
-        .in('id', ids);
-      if (error) return res.status(500).json({ success: false, error: error.message });
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // DELETE /api/admin/tg-videos/:id
-  app.delete("/api/admin/tg-videos/:id", async (req, res) => {
-    try {
-      if (!requireAdminForTgVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
-      const supabase = getSupabase();
-      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
-      const { error } = await supabase.from('telegram_videos').delete().eq('id', req.params.id);
-      if (error) return res.status(500).json({ success: false, error: error.message });
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // Shared subscription gate for the student-facing endpoints below.
-  async function canStudentWatchVideos(req: express.Request, bankId: string): Promise<{ ok: boolean; telegramId: string; error?: string }> {
-    const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
-    const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
-    const isAdminCaller = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
-    if (isAdminCaller) return { ok: true, telegramId: requesterId };
-    const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
-    if (!userRow?.id) return { ok: false, telegramId: requesterId, error: "Subscription required." };
-    const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, bankId);
-    if (!subAuth.isSubscribed) return { ok: false, telegramId: requesterId, error: "An active subscription for this bank is required to view videos." };
-    return { ok: true, telegramId: requesterId || String(userRow.telegram_id || '') };
-  }
-
-  // GET /api/videos/for-question?questionId= — videos linked to the question's topic
   app.get("/api/videos/for-question", async (req, res) => {
     try {
       const supabase = getSupabase();
       if (!supabase) return res.json({ success: true, videos: [] });
       const questionId = String(req.query.questionId || '').trim();
       if (!questionId) return res.status(400).json({ success: false, error: "questionId is required." });
-
-      const { data: q } = await supabase
-        .from('questions')
-        .select('bank_id, major, topic')
-        .eq('id', questionId)
-        .maybeSingle();
+      const { data: q } = await supabase.from('questions').select('bank_id, topic').eq('id', questionId).maybeSingle();
       if (!q || !q.topic) return res.json({ success: true, videos: [] });
-
       const bankId = q.bank_id || 'human_medicine';
-      const gate = await canStudentWatchVideos(req, bankId);
-      if (!gate.ok) return res.json({ success: true, videos: [], locked: true });
-
+      const requesterId = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || req.query.username || '') as string;
+      const isAdminCaller = verifyServerAdminAuthorization(requesterId) || verifyServerAdminAuthorization(requesterUsername);
+      if (!isAdminCaller) {
+        const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+        if (!userRow?.id) return res.json({ success: true, videos: [], locked: true });
+        const subAuth = await resolveAuthoritativeUserSubscription(userRow.id, bankId);
+        if (!subAuth.isSubscribed) return res.json({ success: true, videos: [], locked: true });
+      }
       const { data, error } = await supabase
-        .from('telegram_videos')
-        .select('id, title, duration_seconds')
+        .from('videos')
+        .select('id, title, video_url, thumbnail_url, duration_label, category')
         .eq('bank_id', bankId)
         .ilike('topic', String(q.topic).trim())
         .order('sort_order', { ascending: true })
         .limit(10);
-      if (error) {
-        if (error.code === '42P01') return res.json({ success: true, videos: [] });
-        return res.status(500).json({ success: false, error: error.message });
-      }
-      // Hide videos the admin has not titled yet ("Video 123").
-      return res.json({ success: true, videos: (data || []).filter((v: any) => !/^Video \d+$/.test(String(v.title))) });
+      if (error) return res.json({ success: true, videos: [] });
+      return res.json({ success: true, videos: data || [] });
     } catch (err: any) {
-      console.error("Error in GET /api/videos/for-question:", err);
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // GET /api/videos/by-topic?bankId=&major= — optional browse list for students
-  app.get("/api/videos/tg-list", async (req, res) => {
-    try {
-      const supabase = getSupabase();
-      if (!supabase) return res.json({ success: true, videos: [] });
-      const bankId = String(req.query.bankId || 'human_medicine');
-      const gate = await canStudentWatchVideos(req, bankId);
-      if (!gate.ok) return res.status(403).json({ success: false, error: gate.error });
-      const all: any[] = [];
-      for (let from = 0; from < 10000; from += 1000) {
-        const { data, error } = await supabase
-          .from('telegram_videos')
-          .select('id, title, duration_seconds, major, topic')
-          .eq('bank_id', bankId)
-          .order('major', { ascending: true })
-          .order('topic', { ascending: true })
-          .order('sort_order', { ascending: true })
-          .range(from, from + 999);
-        if (error) {
-          if (error.code === '42P01') return res.json({ success: true, videos: [] });
-          return res.status(500).json({ success: false, error: error.message });
-        }
-        all.push(...(data || []));
-        if (!data || data.length < 1000) break;
-      }
-      return res.json({ success: true, videos: all.filter((v: any) => !/^Video \d+$/.test(String(v.title))) });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // POST /api/videos/tg/:id/send — copies the channel video into the student's chat
-  app.post("/api/videos/tg/:id/send", async (req, res) => {
-    try {
-      const supabase = getSupabase();
-      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
-      const { data: v } = await supabase
-        .from('telegram_videos')
-        .select('id, bank_id, title, tg_chat_id, tg_message_id')
-        .eq('id', req.params.id)
-        .maybeSingle();
-      if (!v) return res.status(404).json({ success: false, error: "Video not found." });
-
-      const gate = await canStudentWatchVideos(req, v.bank_id || 'human_medicine');
-      if (!gate.ok) return res.status(403).json({ success: false, error: gate.error });
-      if (!/^\d+$/.test(String(gate.telegramId || ''))) {
-        return res.status(400).json({ success: false, error: "Could not identify your Telegram account." });
-      }
-
-      const token = getTelegramBotToken();
-      if (!token) return res.status(500).json({ success: false, error: "Bot token is not configured on the server." });
-
-      const tgRes = await fetch(`https://api.telegram.org/bot${token}/copyMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: gate.telegramId,
-          from_chat_id: v.tg_chat_id,
-          message_id: Number(v.tg_message_id),
-          protect_content: true,
-          caption: v.title
-        })
-      });
-      const tgData: any = await tgRes.json().catch(() => ({}));
-      if (!tgData.ok) {
-        console.error('[TG_VIDEOS] copyMessage failed:', tgData.description);
-        const desc = String(tgData.description || '');
-        const hint = /chat not found|bot was blocked|user is deactivated/i.test(desc)
-          ? "Open the bot chat once (press Start) and try again."
-          : /message to copy not found|message can't be copied/i.test(desc)
-          ? "This video is not available right now."
-          : "Could not send the video. Please try again later.";
-        return res.status(502).json({ success: false, error: hint, detail: desc, chatId: String(v.tg_chat_id), messageId: Number(v.tg_message_id) });
-      }
-      return res.json({ success: true });
-    } catch (err: any) {
-      console.error("Error in POST /api/videos/tg/:id/send:", err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -6139,7 +5894,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
     try {
       if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
 
-      const { bankId, title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder } = req.body || {};
+      const { bankId, title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder, major, topic } = req.body || {};
       if (!bankId || !title || !videoUrl) {
         return res.status(400).json({ success: false, error: "bankId, title, and videoUrl are required." });
       }
@@ -6157,7 +5912,9 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
           video_url: String(videoUrl).trim(),
           category: category || null,
           duration_label: durationLabel || null,
-          sort_order: Number(sortOrder) || 0
+          sort_order: Number(sortOrder) || 0,
+          major: major ? String(major).trim() : null,
+          topic: topic ? String(topic).trim() : null
         })
         .select()
         .single();
@@ -6174,7 +5931,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
     try {
       if (!requireAdminForVideos(req)) return res.status(403).json({ success: false, error: "Administrator privileges required." });
 
-      const { title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder } = req.body || {};
+      const { title, description, thumbnailUrl, videoUrl, category, durationLabel, sortOrder, major, topic } = req.body || {};
       const supabase = getSupabase();
       if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
 
@@ -6186,6 +5943,8 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
       if (category !== undefined) updatePayload.category = category || null;
       if (durationLabel !== undefined) updatePayload.duration_label = durationLabel || null;
       if (sortOrder !== undefined) updatePayload.sort_order = Number(sortOrder) || 0;
+      if (major !== undefined) updatePayload.major = major ? String(major).trim() : null;
+      if (topic !== undefined) updatePayload.topic = topic ? String(topic).trim() : null;
 
       const { data, error } = await supabase
         .from('videos')
@@ -6679,95 +6438,6 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
 
       const supabase = getSupabase();
       if (!supabase) return res.status(200).send("OK (Database unavailable)");
-
-      // ==========================================================
-      // ADMIN FORWARDS CHANNEL VIDEOS TO THE BOT -> register them in
-      // telegram_videos (chat id + message id + caption) and auto-match the
-      // topic. Lets the admin skip the JSON export entirely.
-      // ==========================================================
-      const adminFwd = update.message;
-      if (adminFwd) {
-        const fwdFromId = String(adminFwd.from?.id || '');
-        const fwdFromUn = adminFwd.from?.username ? String(adminFwd.from.username) : '';
-        const fwdIsAdmin = verifyServerAdminAuthorization(fwdFromId) || verifyServerAdminAuthorization(fwdFromUn);
-
-        // /videobank dentistry | human_medicine
-        const bankCmd = typeof adminFwd.text === 'string' ? adminFwd.text.trim().match(/^\/videobank\s+(human_medicine|dentistry)$/i) : null;
-        if (fwdIsAdmin && bankCmd) {
-          tgVideoBankByAdmin.set(fwdFromId, bankCmd[1].toLowerCase());
-          await sendTelegramMessage(adminFwd.chat.id, `✅ الفيديوهات القادمة ستُسجَّل في بنك: ${bankCmd[1].toLowerCase()}`);
-          return res.status(200).send("OK");
-        }
-
-        const fwdVideo = adminFwd.video || (adminFwd.document && String(adminFwd.document.mime_type || '').startsWith('video/') ? adminFwd.document : null);
-        if (fwdIsAdmin && fwdVideo) {
-          const origin = adminFwd.forward_origin;
-          const srcChatId = origin?.type === 'channel' ? origin.chat?.id : adminFwd.forward_from_chat?.id;
-          const srcMsgId = origin?.type === 'channel' ? origin.message_id : adminFwd.forward_from_message_id;
-          if (!srcChatId || !srcMsgId) {
-            await sendTelegramMessage(adminFwd.chat.id, "⚠️ لم أستطع معرفة القناة الأصلية لهذا الفيديو. أعد التوجيه (Forward) بدون خيار إخفاء اسم المرسل (Hide sender's name).");
-            return res.status(200).send("OK");
-          }
-
-          const fwdBank = tgVideoBankByAdmin.get(fwdFromId) || 'human_medicine';
-          const caption = String(adminFwd.caption || '').split('\n').map((s: string) => s.trim()).find(Boolean);
-          const fileNameTitle = fwdVideo.file_name ? String(fwdVideo.file_name).replace(/\.[a-z0-9]{2,4}$/i, '').replace(/_+/g, ' ').trim() : '';
-          const fwdTitle = (caption || fileNameTitle || `Video ${srcMsgId}`).slice(0, 300);
-
-          let topics = tgTopicsCache.get(fwdBank);
-          if (!topics || Date.now() - topics.at > 60000) {
-            topics = { at: Date.now(), list: await loadBankTopics(supabase, fwdBank) };
-            tgTopicsCache.set(fwdBank, topics);
-          }
-
-          const { data: prev } = await supabase
-            .from('telegram_videos')
-            .select('title, major, topic, match_status')
-            .eq('tg_chat_id', String(srcChatId))
-            .eq('tg_message_id', Number(srcMsgId))
-            .maybeSingle();
-
-          let rowTitle = fwdTitle;
-          if (prev && /^Video \d+$/.test(rowTitle) && prev.title && !/^Video \d+$/.test(prev.title)) rowTitle = prev.title;
-          const mm = prev && prev.match_status === 'manual'
-            ? { major: prev.major || '', topic: prev.topic || '', status: 'manual' }
-            : matchTitle(rowTitle, topics.list);
-
-          const { error: fwdErr } = await supabase.from('telegram_videos').upsert([{
-            tg_chat_id: String(srcChatId),
-            tg_message_id: Number(srcMsgId),
-            bank_id: fwdBank,
-            title: rowTitle,
-            duration_seconds: Number(fwdVideo.duration) || null,
-            major: mm.major || null,
-            topic: mm.topic || null,
-            match_status: mm.status,
-            sort_order: Number(srcMsgId)
-          }], { onConflict: 'tg_chat_id,tg_message_id' });
-
-          // One summary message after the admin stops forwarding (not one per video).
-          const sess = tgForwardSessions.get(fwdFromId) || { n: 0, auto: 0, review: 0, none: 0, manual: 0, failed: 0, timer: null as any };
-          sess.n++;
-          if (fwdErr) { sess.failed++; console.error('[TG_VIDEOS] forward register error:', fwdErr.message); }
-          else (sess as any)[mm.status] = ((sess as any)[mm.status] || 0) + 1;
-          if (sess.timer) clearTimeout(sess.timer);
-          const replyChat = adminFwd.chat.id;
-          sess.timer = setTimeout(async () => {
-            const s = tgForwardSessions.get(fwdFromId);
-            tgForwardSessions.delete(fwdFromId);
-            if (!s) return;
-            await sendTelegramMessage(
-              replyChat,
-              `✅ تم تسجيل ${s.n - s.failed} فيديو (بنك: ${fwdBank})\n` +
-              `• ربط تلقائي: ${s.auto}\n• يحتاج مراجعة: ${s.review}\n• بدون موضوع: ${s.none}\n• محفوظ يدوياً: ${s.manual}` +
-              (s.failed ? `\n⚠️ فشل: ${s.failed} (هل شغّلت SQL 010؟)` : '') +
-              `\n\nراجع الباقي من لوحة الأدمن ← Videos ← Telegram videos.`
-            );
-          }, 4000);
-          tgForwardSessions.set(fwdFromId, sess);
-          return res.status(200).send("OK");
-        }
-      }
 
       const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://u-jo-tajneed.onrender.com';
 
