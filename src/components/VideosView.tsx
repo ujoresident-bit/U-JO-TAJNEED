@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Search, Play, Clapperboard, X } from 'lucide-react';
 import { resolveSession } from '../services/authService';
+import { TelegramVideoBrowser } from './TelegramVideoBrowser';
 
 interface VideoItem {
   id: string;
@@ -25,6 +26,7 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeVideo, setActiveVideo] = useState<VideoItem | null>(null);
+  const [tgCount, setTgCount] = useState<number | null>(null);
 
   useEffect(() => {
     const user = resolveSession().user;
@@ -78,9 +80,11 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
         />
       </div>
 
+      <TelegramVideoBrowser bankId={bankId} search={search} onLoaded={setTgCount} />
+
       {loading ? (
         <div className="text-center text-slate-500 text-sm py-16">Loading videos...</div>
-      ) : filtered.length === 0 ? (
+      ) : filtered.length === 0 ? (tgCount && tgCount > 0 ? null : (
         <div className="glass-panel p-10 text-center space-y-3">
           <Clapperboard className="w-10 h-10 text-purple-400 mx-auto" />
           <h2 className="text-lg font-bold text-slate-100">
@@ -92,7 +96,7 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
               : 'Try a different search term.'}
           </p>
         </div>
-      ) : (
+      )) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
           {filtered.map((v) => (
             <button
