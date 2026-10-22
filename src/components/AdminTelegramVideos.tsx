@@ -70,6 +70,8 @@ const parseTelegramExport = (json: any): { items: ParsedItem[]; chatId: string; 
   return { items, chatId, channelName: String(json?.name || '') };
 };
 
+const isUntitled = (v: { title: string }) => /^Video \d+$/.test(v.title);
+
 const STATUS_STYLE: Record<string, string> = {
   auto: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
   manual: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
@@ -106,11 +108,12 @@ export const AdminTelegramVideos: React.FC = () => {
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
   // review state
-  const [statusFilter, setStatusFilter] = useState<'attention' | 'all' | 'auto' | 'manual' | 'review' | 'none'>('attention');
+  const [statusFilter, setStatusFilter] = useState<'attention' | 'untitled' | 'all' | 'auto' | 'manual' | 'review' | 'none'>('attention');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkChoice, setBulkChoice] = useState('');
   const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [titleDrafts, setTitleDrafts] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<number | 'bulk' | null>(null);
   const [visibleLimit, setVisibleLimit] = useState(60);
 
@@ -189,6 +192,8 @@ export const AdminTelegramVideos: React.FC = () => {
     }
   };
 
+  const untitledCount = useMemo(() => videos.filter(isUntitled).length, [videos]);
+
   const counts = useMemo(() => {
     const c = { auto: 0, manual: 0, review: 0, none: 0 };
     videos.forEach((v) => {
@@ -201,7 +206,8 @@ export const AdminTelegramVideos: React.FC = () => {
     const q = search.trim().toLowerCase();
     return videos.filter((v) => {
       if (statusFilter === 'attention' && !(v.match_status === 'review' || v.match_status === 'none')) return false;
-      if (statusFilter !== 'attention' && statusFilter !== 'all' && v.match_status !== statusFilter) return false;
+      if (statusFilter === 'untitled' && !isUntitled(v)) return false;
+      if (statusFilter !== 'attention' && statusFilter !== 'untitled' && statusFilter !== 'all' && v.match_status !== statusFilter) return false;
       if (q && !(`${v.title} ${v.major || ''} ${v.topic || ''}`.toLowerCase().includes(q))) return false;
       return true;
     });
@@ -277,6 +283,41 @@ export const AdminTelegramVideos: React.FC = () => {
       setBusy(null);
     }
   };
+
+  const saveTitle = async (v: TgVideoRow) => {
+    const title = (titleDrafts[v.id] ?? v.title).trim();
+    if (!title) return;
+    setBusy(v.id);
+    try {
+      const res = await fetch(`/api/admin/tg-videos/${v.id}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ title })
+      });
+      const d = await res.json();
+      if (!d.success) throw new Error(d.error);
+      const u = d.video;
+      setVideos((prev) =>
+        prev.map((x) =>
+          x.id === v.id
+            ? { ...x, title, major: u ? u.major : x.major, topic: u ? u.topic : x.topic, match_status: u ? u.match_status : x.match_status }
+            : x
+        )
+      );
+      setTitleDrafts((p) => {
+        const n = { ...p };
+        delete n[v.id];
+        return n;
+      });
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save title.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const tgLink = (v: TgVideoRow) =>
+    `https://t.me/c/${String(v.tg_chat_id).replace(/^-100/, '')}/${v.tg_message_id}`;
 
   const remove = async (v: TgVideoRow) => {
     if (!window.confirm(`Remove this video from the app?\n\n${v.title}`)) return;
@@ -442,6 +483,9 @@ export const AdminTelegramVideos: React.FC = () => {
           <button onClick={() => setStatusFilter('attention')} className={chip(statusFilter === 'attention')}>
             Needs attention ({counts.review + counts.none})
           </button>
+          <button onClick={() => setStatusFilter('untitled')} className={chip(statusFilter === 'untitled')}>
+            No title ({untitledCount})
+          </button>
           <button onClick={() => setStatusFilter('auto')} className={chip(statusFilter === 'auto')}>
             Auto ({counts.auto})
           </button>
@@ -503,9 +547,36 @@ export const AdminTelegramVideos: React.FC = () => {
                       className="mt-1 accent-cyan-500"
                     />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-slate-100 font-medium leading-snug break-words">{v.title}</p>
+                      {isUntitled(v) || titleDrafts[v.id] !== undefined ? (
+                        <div className="flex gap-2">
+                          <input
+                            value={titleDrafts[v.id] ?? (isUntitled(v) ? '' : v.title)}
+                            onChange={(e) => setTitleDrafts((p) => ({ ...p, [v.id]: e.target.value }))}
+                            placeholder="Type a title for this video…"
+                            className="flex-1 min-w-0 rounded-lg bg-slate-900 border border-amber-500/50 px-2.5 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
+                          />
+                          <button
+                            onClick={() => saveTitle(v)}
+                            disabled={busy === v.id || !(titleDrafts[v.id] || '').trim()}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 text-xs font-extrabold"
+                          >
+                            Save title
+                          </button>
+                        </div>
+                      ) : (
+                        <p
+                          className="text-sm text-slate-100 font-medium leading-snug break-words cursor-text"
+                          onClick={() => setTitleDrafts((p) => ({ ...p, [v.id]: v.title }))}
+                          title="Click to edit the title"
+                        >
+                          {v.title}
+                        </p>
+                      )}
                       <p className="text-[11px] text-slate-500 mt-0.5">
-                        msg #{v.tg_message_id}
+                        <a href={tgLink(v)} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
+                          Open in Telegram ↗
+                        </a>
+                        {v.duration_seconds ? ` · ${Math.floor(v.duration_seconds / 60)}:${String(v.duration_seconds % 60).padStart(2, '0')}` : ''}
                         {v.major || v.topic ? ` · ${[v.major, v.topic].filter(Boolean).join(' › ')}` : ''}
                       </p>
                     </div>
