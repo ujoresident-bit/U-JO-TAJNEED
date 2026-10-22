@@ -5585,6 +5585,59 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
   // ======================================================================
   const REVIEW_INTERVAL_DAYS = [1, 3, 7];
 
+  // Most Common: the student's place and saved cards (one row per user).
+  app.get("/api/most-common/state", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || '') as string;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.json({ success: true, state: null });
+      const { data, error } = await supabase
+        .from('most_common_progress')
+        .select('last_card_id, far_index, saved_ids, updated_at')
+        .eq('user_id', userRow.id)
+        .maybeSingle();
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      if (!data) return res.json({ success: true, state: null });
+      return res.json({ success: true, state: {
+        lastId: data.last_card_id || null,
+        far: data.far_index || 0,
+        saved: Array.isArray(data.saved_ids) ? data.saved_ids : [],
+        updatedAt: data.updated_at
+      } });
+    } catch (err: any) {
+      console.error("Error in GET /api/most-common/state:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.put("/api/most-common/state", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || '') as string;
+      const supabase = getSupabase();
+      if (!supabase) return res.status(500).json({ success: false, error: "Supabase client not configured." });
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.status(400).json({ success: false, error: "Could not resolve user." });
+      const lastId = typeof req.body?.lastId === 'string' ? req.body.lastId.slice(0, 80) : null;
+      const far = Math.max(0, Math.min(100000, parseInt(String(req.body?.far ?? 0), 10) || 0));
+      const saved = Array.isArray(req.body?.saved)
+        ? Array.from(new Set(req.body.saved.filter((x: any) => typeof x === 'string' && x.length > 0 && x.length <= 80))).slice(0, 1000)
+        : [];
+      const updatedAt = new Date().toISOString();
+      const { error } = await supabase.from('most_common_progress').upsert({
+        user_id: userRow.id, last_card_id: lastId, far_index: far, saved_ids: saved, updated_at: updatedAt
+      }, { onConflict: 'user_id' });
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, updatedAt });
+    } catch (err: any) {
+      console.error("Error in PUT /api/most-common/state:", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post("/api/review/record", async (req, res) => {
     try {
       const requesterId = (req.headers['x-telegram-user-id'] || req.body?.telegramUserId || '') as string;
