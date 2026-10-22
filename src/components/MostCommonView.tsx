@@ -11,17 +11,40 @@ interface MostCommonViewProps {
 
 // Per-browser memory of the student's place and saved cards (by card id, so
 // adding or reordering cards later does not shift what they saved).
-interface McState { lastId?: string; far?: number; saved: string[] }
+interface McState { lastId?: string; far?: number; saved: string[]; ts?: number }
 const stateKey = (uid: string) => `ujo_mc_state_v1_${uid}`;
 const loadState = (uid: string): McState => {
   try {
     const raw = JSON.parse(localStorage.getItem(stateKey(uid)) || 'null');
-    if (raw && typeof raw === 'object') return { lastId: raw.lastId, far: Number(raw.far) || 0, saved: Array.isArray(raw.saved) ? raw.saved.filter((x: any) => typeof x === 'string') : [] };
+    if (raw && typeof raw === 'object') return { lastId: raw.lastId, far: Number(raw.far) || 0, ts: Number(raw.ts) || 0, saved: Array.isArray(raw.saved) ? raw.saved.filter((x: any) => typeof x === 'string') : [] };
   } catch { /* storage unavailable */ }
   return { saved: [] };
 };
 const saveState = (uid: string, s: McState) => {
   try { localStorage.setItem(stateKey(uid), JSON.stringify(s)); } catch { /* ignore */ }
+};
+
+// Account-level copy (Supabase). Failures never interrupt studying: the
+// browser copy above keeps working on its own.
+const authHeaders = (): Record<string, string> => {
+  const u = resolveSession().user;
+  return { 'x-telegram-user-id': u.telegramId || '', 'x-telegram-username': u.username || '' };
+};
+const fetchRemoteState = async (): Promise<{ lastId: string | null; far: number; saved: string[]; updatedAt: string } | null> => {
+  try {
+    const res = await fetch('/api/most-common/state', { headers: authHeaders() });
+    const data = await res.json();
+    return data?.success ? data.state || null : null;
+  } catch { return null; }
+};
+const pushRemoteState = (s: McState): void => {
+  try {
+    fetch('/api/most-common/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ lastId: s.lastId || null, far: s.far || 0, saved: s.saved })
+    }).catch(() => {});
+  } catch { /* ignore */ }
 };
 
 // Most Common is a simple Q&A content set — NOT tied to any question
@@ -72,10 +95,46 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
     if (!current) return;
     setFar((f) => Math.max(f, index));
   }, [index, current]);
+  const stateTs = useRef<number>(initial.ts || 0);
+  const remoteReady = useRef(false);
+  const pushTimer = useRef<any>(null);
   useEffect(() => {
     if (!current) return;
-    saveState(uid, { lastId: current.id, far, saved });
+    // Keep the old stamp until the account copy has been read, so opening the
+    // page alone never makes this browser look "newer" than the account.
+    const ts = remoteReady.current ? Date.now() : stateTs.current;
+    stateTs.current = ts;
+    const s: McState = { lastId: current.id, far, saved, ts };
+    saveState(uid, s);
+    if (!remoteReady.current) return; // wait until the account copy has been read
+    clearTimeout(pushTimer.current);
+    pushTimer.current = setTimeout(() => pushRemoteState(s), 800);
   }, [uid, current, far, saved]);
+  useEffect(() => () => clearTimeout(pushTimer.current), []);
+
+  // On open: if the account copy is newer than this browser's, adopt it;
+  // otherwise push this browser's copy up. Either way both stay in step.
+  useEffect(() => {
+    let dead = false;
+    fetchRemoteState().then((remote) => {
+      if (dead) return;
+      const local = loadState(uid);
+      const remoteTs = remote ? Date.parse(remote.updatedAt) || 0 : 0;
+      if (remote && remoteTs > (local.ts || 0)) {
+        setSaved(remote.saved);
+        setFar((f) => Math.max(remote.far || 0, 0) || f);
+        if (remote.lastId) {
+          const i = cardsRef.current.findIndex((c) => c.id === remote.lastId);
+          if (i >= 0) { setIndex(i); setRevealed(false); }
+        }
+        saveState(uid, { lastId: remote.lastId || undefined, far: remote.far, saved: remote.saved, ts: remoteTs });
+      } else if (local.lastId || local.saved.length > 0) {
+        pushRemoteState(local);
+      }
+      remoteReady.current = true;
+    });
+    return () => { dead = true; };
+  }, [uid]);
 
   const say = (t: string) => {
     setToast(t);
