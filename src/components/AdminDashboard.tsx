@@ -61,6 +61,7 @@ import { AdminFlashcardsManager } from './AdminFlashcardsManager';
 import { AdminVideoManager } from './AdminVideoManager';
 import { AdminMostCommonManager } from './AdminMostCommonManager';
 import { AdminFeedbackManager } from './AdminFeedbackManager';
+import { AdminTelegramVideos } from './AdminTelegramVideos';
 import { fetchAllFeedback } from '../services/adminService';
 import { AdminStudyContentManager } from './AdminStudyContentManager';
 
@@ -95,6 +96,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
   const [activeTab, setActiveTab] = useState<'overview' | 'payments' | 'users' | 'bank' | 'flashcards' | 'most_common' | 'smart_first_aid' | 'videos' | 'feedback' | 'config'>('overview');
   // Feedback inbox: unresolved count (tab badge) and the item the admin
   // asked to open for editing from a report.
+  const [videoSubTab, setVideoSubTab] = useState<'telegram' | 'library'>('telegram');
   const [feedbackOpenCount, setFeedbackOpenCount] = useState<number>(0);
   const [focusQuestionId, setFocusQuestionId] = useState<string | null>(null);
   const [focusCardId, setFocusCardId] = useState<string | null>(null);
@@ -783,7 +785,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate, onRe
         <AdminFeedbackManager onOpenItem={openFeedbackItem} onUnresolvedCount={setFeedbackOpenCount} />
       )}
       {activeTab === 'smart_first_aid' && <AdminStudyContentManager />}
-      {activeTab === 'videos' && <AdminVideoManager />}
+      {activeTab === 'videos' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 p-1 rounded-2xl bg-slate-900 border border-slate-800 text-xs font-bold">
+            <button
+              onClick={() => setVideoSubTab('telegram')}
+              className={`flex-1 py-2 rounded-xl transition-all ${videoSubTab === 'telegram' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Telegram videos
+            </button>
+            <button
+              onClick={() => setVideoSubTab('library')}
+              className={`flex-1 py-2 rounded-xl transition-all ${videoSubTab === 'library' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Uploaded library
+            </button>
+          </div>
+          {videoSubTab === 'telegram' ? <AdminTelegramVideos /> : <AdminVideoManager />}
+        </div>
+      )}
 
       {/* Tab 6: System Configuration */}
       {activeTab === 'config' && (
