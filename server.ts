@@ -6119,7 +6119,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
           : /message to copy not found|message can't be copied/i.test(desc)
           ? "This video is not available right now."
           : "Could not send the video. Please try again later.";
-        return res.status(502).json({ success: false, error: hint });
+        return res.status(502).json({ success: false, error: hint, detail: desc, chatId: String(v.tg_chat_id), messageId: Number(v.tg_message_id) });
       }
       return res.json({ success: true });
     } catch (err: any) {
