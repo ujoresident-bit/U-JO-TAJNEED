@@ -28,6 +28,7 @@ import { ExplanationPanel } from './ExplanationPanel';
 import { QuestionNavigator } from './QuestionNavigator';
 import { EndBlockModal } from './EndBlockModal';
 import { FeedbackButton } from './FeedbackButton';
+import { QuestionVideos } from './QuestionVideos';
 import { BlockSummaryView } from './BlockSummaryView';
 
 interface QuestionScreenProps {
@@ -490,6 +491,8 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
           stats={stats}
         />
       )}
+
+      {isAnswered && <QuestionVideos questionId={currentQuestion.id} />}
 
       {isAnswered && faPart && (
         <button
