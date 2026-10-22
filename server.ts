@@ -6039,7 +6039,8 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
         if (error.code === '42P01') return res.json({ success: true, videos: [] });
         return res.status(500).json({ success: false, error: error.message });
       }
-      return res.json({ success: true, videos: data || [] });
+      // Hide videos the admin has not titled yet ("Video 123").
+      return res.json({ success: true, videos: (data || []).filter((v: any) => !/^Video \d+$/.test(String(v.title))) });
     } catch (err: any) {
       console.error("Error in GET /api/videos/for-question:", err);
       return res.status(500).json({ success: false, error: err.message });
@@ -6071,7 +6072,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
         all.push(...(data || []));
         if (!data || data.length < 1000) break;
       }
-      return res.json({ success: true, videos: all });
+      return res.json({ success: true, videos: all.filter((v: any) => !/^Video \d+$/.test(String(v.title))) });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
