@@ -5596,8 +5596,9 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
       if (!userRow?.id) return res.json({ success: true, state: null });
       const { data, error } = await supabase
         .from('most_common_progress')
-        .select('last_card_id, far_index, saved_ids, updated_at')
+        .select('last_card_id, far_index, saved_ids, ratings, updated_at')
         .eq('user_id', userRow.id)
+        .eq('card_type', String(req.query.cardType) === 'flashcard' ? 'flashcard' : 'most_common')
         .maybeSingle();
       if (error) return res.status(500).json({ success: false, error: error.message });
       if (!data) return res.json({ success: true, state: null });
@@ -5605,6 +5606,7 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
         lastId: data.last_card_id || null,
         far: data.far_index || 0,
         saved: Array.isArray(data.saved_ids) ? data.saved_ids : [],
+        ratings: data.ratings && typeof data.ratings === 'object' ? data.ratings : {},
         updatedAt: data.updated_at
       } });
     } catch (err: any) {
@@ -5626,10 +5628,19 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
       const saved = Array.isArray(req.body?.saved)
         ? Array.from(new Set(req.body.saved.filter((x: any) => typeof x === 'string' && x.length > 0 && x.length <= 80))).slice(0, 1000)
         : [];
+      const cardType = req.body?.cardType === 'flashcard' ? 'flashcard' : 'most_common';
+      const ratings: Record<string, number> = {};
+      if (req.body?.ratings && typeof req.body.ratings === 'object') {
+        let n = 0;
+        for (const [k, v] of Object.entries(req.body.ratings)) {
+          if (n >= 3000) break;
+          if (k.length > 0 && k.length <= 80 && (v === 1 || v === -1)) { ratings[k] = v as number; n++; }
+        }
+      }
       const updatedAt = new Date().toISOString();
       const { error } = await supabase.from('most_common_progress').upsert({
-        user_id: userRow.id, last_card_id: lastId, far_index: far, saved_ids: saved, updated_at: updatedAt
-      }, { onConflict: 'user_id' });
+        user_id: userRow.id, card_type: cardType, last_card_id: lastId, far_index: far, saved_ids: saved, ratings, updated_at: updatedAt
+      }, { onConflict: 'user_id,card_type' });
       if (error) return res.status(500).json({ success: false, error: error.message });
       return res.json({ success: true, updatedAt });
     } catch (err: any) {
