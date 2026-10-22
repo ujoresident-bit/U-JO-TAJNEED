@@ -63,7 +63,7 @@ export const QuestionVideos: React.FC<QuestionVideosProps> = ({ questionId }) =>
       });
       const d = await res.json().catch(() => ({}));
       if (res.ok && d.success) setSentId(id);
-      else setError(d.error || 'Could not send the video.');
+      else setError((d.error || 'Could not send the video.') + (d.detail ? ` [${d.detail}]` : ''));
     } catch {
       setError('Network error. Please try again.');
     } finally {
