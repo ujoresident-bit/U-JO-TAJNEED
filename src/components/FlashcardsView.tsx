@@ -58,6 +58,8 @@ const pushRemoteState = (s: FcState): void => {
   } catch { /* ignore */ }
 };
 
+const lenClass = (s: string) => (s.length > 200 ? 'xl' : s.length > 120 ? 'l' : s.length > 70 ? 'm' : 's');
+
 export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) => {
   const uid = resolveSession().user.telegramId;
   const [cards, setCards] = useState<Flashcard[]>(() => getFlashcards());
@@ -391,6 +393,27 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
       .uj-fc .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;padding:11px 18px;border-radius:999px;background:#17202a;border:1px solid rgba(79,214,236,.4);font:500 13px 'Geist',system-ui,sans-serif;color:var(--ice);white-space:nowrap;animation:ujfc-t .4s cubic-bezier(.16,1,.3,1)}
       @keyframes ujfc-t{from{opacity:0;transform:translate(-50%,30px)}to{opacity:1;transform:translate(-50%,0)}}
       .uj-fc button:focus-visible,.uj-fc input:focus-visible{outline:2px solid var(--cy);outline-offset:3px}
+      .uj-fc .card,.uj-fc .face,.uj-fc .q,.uj-fc .mid p,.uj-fc .slot p{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
+      @media(max-width:520px){
+        .uj-fc .fbq{width:40px;height:40px;padding:0!important;justify-content:center;border-radius:999px!important;flex:none}
+        .uj-fc .fbq>span{display:none}
+        .uj-fc .layout{grid-template-columns:minmax(0,1fr) 40px;gap:8px}
+        .uj-fc .rail canvas{width:40px}
+        .uj-fc .rail{min-height:320px}
+        .uj-fc .card{padding:18px 16px 16px;border-radius:22px}
+        .uj-fc .face{padding:16px 14px;border-radius:22px}
+        .uj-fc .q{font-size:clamp(21px,6vw,26px);margin:16px 0 18px}
+        .uj-fc .face .mid p{font-size:clamp(20px,5.8vw,25px)}
+        .uj-fc .slot{padding:14px;min-height:64px}.uj-fc .slot p{font-size:15.5px}
+        .uj-fc .flip{height:clamp(290px,84vw,380px)}
+        .uj-fc .face .mid p[data-l=m]{font-size:21px}.uj-fc .face .mid p[data-l=l]{font-size:18px}.uj-fc .face .mid p[data-l=xl]{font-size:16px;line-height:1.35}
+        .uj-fc .nav{grid-template-columns:1fr 64px 1fr;gap:8px}
+        .uj-fc .nb{padding:0 8px;font-size:13px;min-height:52px}
+        .uj-fc .nb.jump{min-width:0}
+        .uj-fc .rate button{font-size:13px;padding:0 8px;min-height:52px}
+        .uj-fc .tabs button{font-size:12.5px}
+        .uj-fc .chips{gap:6px}
+      }
       @media (prefers-reduced-motion:reduce){.uj-fc *{animation:none!important;transition:none!important}}
     
       .uj-fc .flip{position:relative;height:clamp(250px,62vw,320px);perspective:1100px;cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -399,7 +422,8 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
       .uj-fc .face{position:absolute;inset:0;border-radius:26px;padding:20px 22px;display:flex;flex-direction:column;backface-visibility:hidden;-webkit-backface-visibility:hidden}
       .uj-fc .face.fr{border:1px solid rgba(79,214,236,.22);background:linear-gradient(160deg,#0b1a20,#0a1217 60%);box-shadow:0 30px 80px -44px rgba(79,214,236,.4)}
       .uj-fc .face.bk{transform:rotateY(180deg);border:1px solid rgba(111,224,180,.38);background:linear-gradient(160deg,#0c1f1a,#0a1215 60%);box-shadow:0 30px 80px -44px rgba(111,224,180,.5)}
-      .uj-fc .face .mid{flex:1;display:grid;place-items:center;text-align:center;padding:8px 4px;overflow:auto}
+      .uj-fc .face .mid{flex:1;display:flex;text-align:center;padding:8px 4px;overflow:auto;min-height:0}
+      .uj-fc .face .mid p{margin:auto}
       .uj-fc .face .mid p{margin:0;font:400 clamp(24px,6vw,31px)/1.25 var(--serif);color:#EAF1F7;text-wrap:balance;white-space:pre-wrap}
       .uj-fc .face.bk .mid p{color:#D8F7EA}
       .uj-fc .face .ft{display:flex;justify-content:center}
@@ -422,7 +446,7 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
   const Title = (
     <div>
       <div className="mono" style={{ color: 'var(--cy)' }}>Revise</div>
-      <h1 className="serif mt-2 text-[clamp(46px,12vw,66px)] leading-[.96] text-white" style={{ letterSpacing: '-.015em' }}>
+      <h1 className="serif mt-2 text-[clamp(36px,11vw,66px)] leading-[.96] text-white" style={{ letterSpacing: '-.015em' }}>
         Flash<em className="text-[#CFEFF8]">cards</em>
       </h1>
     </div>
@@ -463,7 +487,7 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
           </div>
         </div>
         <div className="text-right pb-1">
-          <b className="serif block text-[54px] leading-none text-white" style={{ fontVariantNumeric: 'tabular-nums' }}>{pct}<small className="text-[26px] text-slate-400">%</small></b>
+          <b className="serif block text-[38px] sm:text-[54px] leading-none text-white" style={{ fontVariantNumeric: 'tabular-nums' }}>{pct}<small className="text-[20px] sm:text-[26px] text-slate-400">%</small></b>
           <span className="mono">Completed</span>
         </div>
       </section>
@@ -487,10 +511,10 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
                     <button className={`ic ${isSaved ? 'on' : ''}`} onClick={toggleSave} aria-pressed={isSaved} aria-label={isSaved ? 'Remove from saved' : 'Save this card'}>
                       <Bookmark className="w-[18px] h-[18px]" aria-hidden="true" />
                     </button>
-                    <FeedbackButton kind="flashcard" itemId={current.id} />
+                    <FeedbackButton kind="flashcard" itemId={current.id} className="fbq" />
                   </div>
                 </div>
-                <div className="mid"><p>{current.question}</p></div>
+                <div className="mid"><p data-l={lenClass(current.question)}>{current.question}</p></div>
                 <div className="ft"><span className="mono">Tap to flip</span></div>
               </div>
               <div className="face bk" aria-hidden={!flipped}>
@@ -502,7 +526,7 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ onNavigate }) =>
                     <span className="mono whitespace-nowrap" style={{ color: 'var(--gr)' }}>Answer {index + 1}</span>
                   </span>
                 </div>
-                <div className="mid"><p>{current.answer}</p></div>
+                <div className="mid"><p data-l={lenClass(current.answer)}>{current.answer}</p></div>
                 <div className="ft"><span className="mono">Tap to flip back</span></div>
               </div>
             </div>
