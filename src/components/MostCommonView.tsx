@@ -343,6 +343,26 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
       .uj-mc .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;padding:11px 18px;border-radius:999px;background:#17202a;border:1px solid rgba(79,214,236,.4);font:500 13px 'Geist',system-ui,sans-serif;color:var(--ice);white-space:nowrap;animation:ujmc-t .4s cubic-bezier(.16,1,.3,1)}
       @keyframes ujmc-t{from{opacity:0;transform:translate(-50%,30px)}to{opacity:1;transform:translate(-50%,0)}}
       .uj-mc button:focus-visible,.uj-mc input:focus-visible{outline:2px solid var(--cy);outline-offset:3px}
+      .uj-mc .card,.uj-mc .face,.uj-mc .q,.uj-mc .mid p,.uj-mc .slot p{overflow-wrap:anywhere;word-break:break-word;hyphens:auto}
+      @media(max-width:520px){
+        .uj-mc .fbq{width:40px;height:40px;padding:0!important;justify-content:center;border-radius:999px!important;flex:none}
+        .uj-mc .fbq>span{display:none}
+        .uj-mc .layout{grid-template-columns:minmax(0,1fr) 40px;gap:8px}
+        .uj-mc .rail canvas{width:40px}
+        .uj-mc .rail{min-height:320px}
+        .uj-mc .card{padding:18px 16px 16px;border-radius:22px}
+        .uj-mc .face{padding:16px 14px;border-radius:22px}
+        .uj-mc .q{font-size:clamp(21px,6vw,26px);margin:16px 0 18px}
+        .uj-mc .face .mid p{font-size:clamp(20px,5.8vw,25px)}
+        .uj-mc .slot{padding:14px;min-height:64px}.uj-mc .slot p{font-size:15.5px}
+        .uj-mc .flip{height:clamp(260px,70vw,330px)}
+        .uj-mc .nav{grid-template-columns:1fr 64px 1fr;gap:8px}
+        .uj-mc .nb{padding:0 8px;font-size:13px;min-height:52px}
+        .uj-mc .nb.jump{min-width:0}
+        .uj-mc .rate button{font-size:13px;padding:0 8px;min-height:52px}
+        .uj-mc .tabs button{font-size:12.5px}
+        .uj-mc .chips{gap:6px}
+      }
       @media (prefers-reduced-motion:reduce){.uj-mc *{animation:none!important;transition:none!important}}
     `}</style>
   );
@@ -355,7 +375,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
   const Title = (
     <div>
       <div className="mono" style={{ color: 'var(--cy)' }}>Revise</div>
-      <h1 className="serif mt-2 text-[clamp(46px,12vw,66px)] leading-[.96] text-white" style={{ letterSpacing: '-.015em' }}>
+      <h1 className="serif mt-2 text-[clamp(36px,11vw,66px)] leading-[.96] text-white" style={{ letterSpacing: '-.015em' }}>
         Most <em className="text-[#CFEFF8]">Common</em>
       </h1>
     </div>
@@ -390,7 +410,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
       <section className="flex items-end justify-between gap-4 mt-1">
         {Title}
         <div className="text-right pb-1">
-          <b className="serif block text-[54px] leading-none text-white" style={{ fontVariantNumeric: 'tabular-nums' }}>{pct}<small className="text-[26px] text-slate-400">%</small></b>
+          <b className="serif block text-[38px] sm:text-[54px] leading-none text-white" style={{ fontVariantNumeric: 'tabular-nums' }}>{pct}<small className="text-[20px] sm:text-[26px] text-slate-400">%</small></b>
           <span className="mono">Completed</span>
         </div>
       </section>
@@ -407,7 +427,7 @@ export const MostCommonView: React.FC<MostCommonViewProps> = ({ onNavigate }) =>
                 <button className={`ic ${isSaved ? 'on' : ''}`} onClick={toggleSave} aria-pressed={isSaved} aria-label={isSaved ? 'Remove from saved' : 'Save this card'}>
                   <Bookmark className="w-[18px] h-[18px]" aria-hidden="true" />
                 </button>
-                <FeedbackButton kind="most_common" itemId={current.id} />
+                <FeedbackButton kind="most_common" itemId={current.id} className="fbq" />
               </div>
             </div>
 
