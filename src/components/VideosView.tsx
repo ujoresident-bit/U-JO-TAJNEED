@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Search, Play, Clapperboard, X } from 'lucide-react';
 import { resolveSession } from '../services/authService';
-import { TelegramVideoBrowser } from './TelegramVideoBrowser';
 
 interface VideoItem {
   id: string;
@@ -11,6 +10,7 @@ interface VideoItem {
   video_url: string;
   category?: string;
   duration_label?: string;
+  topic?: string | null;
 }
 
 interface VideosViewProps {
@@ -26,7 +26,6 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeVideo, setActiveVideo] = useState<VideoItem | null>(null);
-  const [tgCount, setTgCount] = useState<number | null>(null);
 
   useEffect(() => {
     const user = resolveSession().user;
@@ -48,9 +47,21 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
     const q = search.trim().toLowerCase();
     if (!q) return videos;
     return videos.filter(
-      (v) => v.title.toLowerCase().includes(q) || (v.category || '').toLowerCase().includes(q)
+      (v) => v.title.toLowerCase().includes(q) || (v.category || '').toLowerCase().includes(q) || (v.topic || '').toLowerCase().includes(q)
     );
   }, [videos, search]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, VideoItem[]>();
+    filtered.forEach((v) => {
+      const k = (v.category || '').trim() || 'Other videos';
+      if (!map.has(k)) map.set(k, []);
+      map.get(k)!.push(v);
+    });
+    return Array.from(map.entries()).sort((a, b) =>
+      a[0] === 'Other videos' ? 1 : b[0] === 'Other videos' ? -1 : a[0].localeCompare(b[0])
+    );
+  }, [filtered]);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-12">
@@ -80,11 +91,9 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
         />
       </div>
 
-      <TelegramVideoBrowser bankId={bankId} search={search} onLoaded={setTgCount} />
-
       {loading ? (
         <div className="text-center text-slate-500 text-sm py-16">Loading videos...</div>
-      ) : filtered.length === 0 ? (tgCount && tgCount > 0 ? null : (
+      ) : filtered.length === 0 ? (
         <div className="glass-panel p-10 text-center space-y-3">
           <Clapperboard className="w-10 h-10 text-purple-400 mx-auto" />
           <h2 className="text-lg font-bold text-slate-100">
@@ -96,9 +105,17 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
               : 'Try a different search term.'}
           </p>
         </div>
-      )) : (
+      ) : (
+        <div className="space-y-8">
+          {grouped.map(([section, items]) => (
+            <div key={section} className="space-y-3">
+              <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                <span className="w-1 h-4 rounded bg-purple-500" />
+                <span>{section}</span>
+                <span className="text-[10px] text-slate-500 font-semibold">{items.length}</span>
+              </h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {filtered.map((v) => (
+          {items.map((v) => (
             <button
               key={v.id}
               onClick={() => setActiveVideo(v)}
@@ -126,6 +143,9 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
             </button>
           ))}
         </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {activeVideo && (
@@ -142,6 +162,8 @@ export const VideosView: React.FC<VideosViewProps> = ({ bankId, onNavigate }) =>
                 src={activeVideo.video_url}
                 className="w-full h-full"
                 controls
+                controlsList="nodownload"
+                onContextMenu={(e) => e.preventDefault()}
                 autoPlay
                 playsInline
               />
