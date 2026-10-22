@@ -23,6 +23,10 @@ interface NeuralMapProps {
   timeScale?: number;
   onSelect?: (node: NeuralNode | null) => void;
   className?: string;
+  // Layout options (defaults match the home page hero).
+  showEcg?: boolean;
+  stageClass?: string;
+  fade?: boolean; // soften the edges so the network floats free
 }
 
 interface Geo {
@@ -105,7 +109,7 @@ const buildGeometry = (ids: string[], lowPower: boolean) => {
   return { geo, nodeCount, edges };
 };
 
-export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false, timeScale = 1, onSelect, className = '' }) => {
+export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false, timeScale = 1, onSelect, className = '', showEcg = true, stageClass, fade = false }) => {
   const stageRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLCanvasElement>(null);
   const ecgRef = useRef<HTMLCanvasElement>(null);
@@ -136,9 +140,9 @@ export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false,
 
   useEffect(() => {
     const stage = stageRef.current, cv = mainRef.current, ec = ecgRef.current;
-    if (!stage || !cv || !ec) return;
-    const cx = cv.getContext('2d'), ex = ec.getContext('2d');
-    if (!cx || !ex) return;
+    if (!stage || !cv) return;
+    const cx = cv.getContext('2d'), ex = ec ? ec.getContext('2d') : null;
+    if (!cx) return;
 
     const reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     let W = 0, H = 0, EW = 0, EH = 0, dpr = 1;
@@ -151,11 +155,14 @@ export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false,
       dpr = Math.min(lowPower ? 1.5 : 2, window.devicePixelRatio || 1);
       const b = cv.getBoundingClientRect(); W = b.width; H = b.height;
       cv.width = Math.max(1, W * dpr); cv.height = Math.max(1, H * dpr); cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const e = ec.getBoundingClientRect(); EW = e.width; EH = e.height;
-      ec.width = Math.max(1, EW * dpr); ec.height = Math.max(1, EH * dpr); ex.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (ec && ex) {
+        const e = ec.getBoundingClientRect(); EW = e.width; EH = e.height;
+        ec.width = Math.max(1, EW * dpr); ec.height = Math.max(1, EH * dpr); ex.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
     };
 
     const drawEcg = (now: number, T: number, lit: boolean) => {
+      if (!ex) return;
       ex.clearRect(0, 0, EW, EH);
       const span = 2.8 * BEAT, mid = EH * 0.62;
       const amp = EH * 0.5 * clamp01((T - 0.55) / 0.7);
@@ -204,8 +211,10 @@ export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false,
       const rg = cx.createRadialGradient(cX, cY, 0, cX, cY, S * 1.7);
       rg.addColorStop(0, `rgba(79,214,236,${el ? 0.14 + breathe * 0.06 : 0.05})`); rg.addColorStop(1, 'rgba(79,214,236,0)');
       cx.fillStyle = rg; cx.fillRect(0, 0, W, H);
-      cx.strokeStyle = 'rgba(207,239,248,.26)'; cx.lineWidth = 1; cx.beginPath();
-      cx.ellipse(W / 2, H * 1.55, W * 1.05, H * 0.95, 0, Math.PI * 1.12, Math.PI * 1.88); cx.stroke();
+      if (showEcg) {
+        cx.strokeStyle = 'rgba(207,239,248,.26)'; cx.lineWidth = 1; cx.beginPath();
+        cx.ellipse(W / 2, H * 1.55, W * 1.05, H * 0.95, 0, Math.PI * 1.12, Math.PI * 1.88); cx.stroke();
+      }
 
       // project
       const list: number[] = new Array(geo.length * 6);
@@ -347,15 +356,16 @@ export const NeuralMap: React.FC<NeuralMapProps> = ({ nodes, decorative = false,
 
   return (
     <div className={className}>
-      <div ref={stageRef} className="relative w-full h-[min(92vw,400px)] lg:h-[480px]" style={{ touchAction: 'pan-y' }}>
+      <div ref={stageRef} className={`relative w-full ${stageClass ?? 'h-[min(92vw,400px)] lg:h-[480px]'}`} style={{ touchAction: 'pan-y' }}>
         <canvas
           ref={mainRef}
           className="absolute inset-0 w-full h-full block"
+          style={fade ? { WebkitMaskImage: 'radial-gradient(closest-side, #000 60%, transparent)', maskImage: 'radial-gradient(closest-side, #000 60%, transparent)' } : undefined}
           role="img"
           aria-label={decorative ? 'Decorative network of connected points' : 'A three-dimensional network of your exam subjects. Brighter nodes are subjects where your accuracy is higher.'}
         />
       </div>
-      <canvas ref={ecgRef} className="block w-full" style={{ height: 54 }} aria-hidden="true" />
+      {showEcg && <canvas ref={ecgRef} className="block w-full" style={{ height: 54 }} aria-hidden="true" />}
     </div>
   );
 };
