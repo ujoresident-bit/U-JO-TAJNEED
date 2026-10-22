@@ -108,7 +108,7 @@ export const TelegramVideoBrowser: React.FC<TelegramVideoBrowserProps> = ({ bank
       const res = await fetch(`/api/videos/tg/${encodeURIComponent(id)}/send`, { method: 'POST', headers });
       const d = await res.json().catch(() => ({}));
       if (res.ok && d.success) setSentId(id);
-      else setError(d.error || 'Could not send the video.');
+      else setError((d.error || 'Could not send the video.') + (d.detail ? ` [${d.detail}]` : ''));
     } catch {
       setError('Network error. Please try again.');
     } finally {
