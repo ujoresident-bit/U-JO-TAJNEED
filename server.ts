@@ -5741,6 +5741,9 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
   // (copyMessage) with protect_content so it can't be forwarded or saved.
   // The bot must be an admin of the channel.
   // ==========================================================================
+  const tgVideoBankByAdmin = new Map<string, string>();
+  const tgTopicsCache = new Map<string, { at: number; list: { major: string; topic: string }[] }>();
+  const tgForwardSessions = new Map<string, { n: number; auto: number; review: number; none: number; manual: number; failed: number; timer: any }>();
   const requireAdminForTgVideos = (req: express.Request): boolean => {
     const id = (req.headers['x-telegram-user-id'] || req.query.telegramUserId || '') as string;
     const un = (req.headers['x-telegram-username'] || req.query.username || '') as string;
@@ -6675,6 +6678,95 @@ Return ONLY a JSON array: [{"front": string, "back": string}].`;
 
       const supabase = getSupabase();
       if (!supabase) return res.status(200).send("OK (Database unavailable)");
+
+      // ==========================================================
+      // ADMIN FORWARDS CHANNEL VIDEOS TO THE BOT -> register them in
+      // telegram_videos (chat id + message id + caption) and auto-match the
+      // topic. Lets the admin skip the JSON export entirely.
+      // ==========================================================
+      const adminFwd = update.message;
+      if (adminFwd) {
+        const fwdFromId = String(adminFwd.from?.id || '');
+        const fwdFromUn = adminFwd.from?.username ? String(adminFwd.from.username) : '';
+        const fwdIsAdmin = verifyServerAdminAuthorization(fwdFromId) || verifyServerAdminAuthorization(fwdFromUn);
+
+        // /videobank dentistry | human_medicine
+        const bankCmd = typeof adminFwd.text === 'string' ? adminFwd.text.trim().match(/^\/videobank\s+(human_medicine|dentistry)$/i) : null;
+        if (fwdIsAdmin && bankCmd) {
+          tgVideoBankByAdmin.set(fwdFromId, bankCmd[1].toLowerCase());
+          await sendTelegramMessage(adminFwd.chat.id, `✅ الفيديوهات القادمة ستُسجَّل في بنك: ${bankCmd[1].toLowerCase()}`);
+          return res.status(200).send("OK");
+        }
+
+        const fwdVideo = adminFwd.video || (adminFwd.document && String(adminFwd.document.mime_type || '').startsWith('video/') ? adminFwd.document : null);
+        if (fwdIsAdmin && fwdVideo) {
+          const origin = adminFwd.forward_origin;
+          const srcChatId = origin?.type === 'channel' ? origin.chat?.id : adminFwd.forward_from_chat?.id;
+          const srcMsgId = origin?.type === 'channel' ? origin.message_id : adminFwd.forward_from_message_id;
+          if (!srcChatId || !srcMsgId) {
+            await sendTelegramMessage(adminFwd.chat.id, "⚠️ لم أستطع معرفة القناة الأصلية لهذا الفيديو. أعد التوجيه (Forward) بدون خيار إخفاء اسم المرسل (Hide sender's name).");
+            return res.status(200).send("OK");
+          }
+
+          const fwdBank = tgVideoBankByAdmin.get(fwdFromId) || 'human_medicine';
+          const caption = String(adminFwd.caption || '').split('\n').map((s: string) => s.trim()).find(Boolean);
+          const fileNameTitle = fwdVideo.file_name ? String(fwdVideo.file_name).replace(/\.[a-z0-9]{2,4}$/i, '').replace(/_+/g, ' ').trim() : '';
+          const fwdTitle = (caption || fileNameTitle || `Video ${srcMsgId}`).slice(0, 300);
+
+          let topics = tgTopicsCache.get(fwdBank);
+          if (!topics || Date.now() - topics.at > 60000) {
+            topics = { at: Date.now(), list: await loadBankTopics(supabase, fwdBank) };
+            tgTopicsCache.set(fwdBank, topics);
+          }
+
+          const { data: prev } = await supabase
+            .from('telegram_videos')
+            .select('title, major, topic, match_status')
+            .eq('tg_chat_id', String(srcChatId))
+            .eq('tg_message_id', Number(srcMsgId))
+            .maybeSingle();
+
+          let rowTitle = fwdTitle;
+          if (prev && /^Video \d+$/.test(rowTitle) && prev.title && !/^Video \d+$/.test(prev.title)) rowTitle = prev.title;
+          const mm = prev && prev.match_status === 'manual'
+            ? { major: prev.major || '', topic: prev.topic || '', status: 'manual' }
+            : matchTitle(rowTitle, topics.list);
+
+          const { error: fwdErr } = await supabase.from('telegram_videos').upsert([{
+            tg_chat_id: String(srcChatId),
+            tg_message_id: Number(srcMsgId),
+            bank_id: fwdBank,
+            title: rowTitle,
+            duration_seconds: Number(fwdVideo.duration) || null,
+            major: mm.major || null,
+            topic: mm.topic || null,
+            match_status: mm.status,
+            sort_order: Number(srcMsgId)
+          }], { onConflict: 'tg_chat_id,tg_message_id' });
+
+          // One summary message after the admin stops forwarding (not one per video).
+          const sess = tgForwardSessions.get(fwdFromId) || { n: 0, auto: 0, review: 0, none: 0, manual: 0, failed: 0, timer: null as any };
+          sess.n++;
+          if (fwdErr) { sess.failed++; console.error('[TG_VIDEOS] forward register error:', fwdErr.message); }
+          else (sess as any)[mm.status] = ((sess as any)[mm.status] || 0) + 1;
+          if (sess.timer) clearTimeout(sess.timer);
+          const replyChat = adminFwd.chat.id;
+          sess.timer = setTimeout(async () => {
+            const s = tgForwardSessions.get(fwdFromId);
+            tgForwardSessions.delete(fwdFromId);
+            if (!s) return;
+            await sendTelegramMessage(
+              replyChat,
+              `✅ تم تسجيل ${s.n - s.failed} فيديو (بنك: ${fwdBank})\n` +
+              `• ربط تلقائي: ${s.auto}\n• يحتاج مراجعة: ${s.review}\n• بدون موضوع: ${s.none}\n• محفوظ يدوياً: ${s.manual}` +
+              (s.failed ? `\n⚠️ فشل: ${s.failed} (هل شغّلت SQL 010؟)` : '') +
+              `\n\nراجع الباقي من لوحة الأدمن ← Videos ← Telegram videos.`
+            );
+          }, 4000);
+          tgForwardSessions.set(fwdFromId, sess);
+          return res.status(200).send("OK");
+        }
+      }
 
       const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://u-jo-tajneed.onrender.com';
 
