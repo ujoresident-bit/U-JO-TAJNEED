@@ -22,12 +22,17 @@ import { getCurrentUser, checkAccountActiveStatus } from './services/authService
 import { syncQuestionsWithSupabase, syncBlocksFromSupabase, pushUnsyncedBlocks } from './services/questionBankService';
 import { syncFlashcardsFromSupabase } from './services/flashcardService';
 import { syncSubscriptionFromSupabase } from './services/subscriptionService';
+import { claimSession, checkSession, SESSION_REPLACED_EVENT } from './services/sessionService';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<string>('home');
   const [viewParams, setViewParams] = useState<any>({});
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [isAccountInactive, setIsAccountInactive] = useState<boolean>(false);
+  // Students use one device at a time: when another device takes over, this one is locked.
+  const [replaced, setReplaced] = useState<boolean>(false);
+  const [takingOver, setTakingOver] = useState<boolean>(false);
+  const replacedRef = useRef<boolean>(false);
   // Non-skippable, plays fully on every fresh page load — no
   // sessionStorage persistence, matching the exact behavior established
   // for U JO Resident's own intro.
@@ -47,21 +52,53 @@ export default function App() {
       setRefreshKey((prev) => prev + 1);
     }).catch(() => {});
     syncQuestionsWithSupabase().catch(() => {});
-    syncBlocksFromSupabase().then(() => pushUnsyncedBlocks()).catch(() => {});
     syncFlashcardsFromSupabase().catch(() => {});
 
-    // Coming back to the app after using another device: pull the account's
-    // latest blocks again (at most every 20 seconds).
-    let lastPull = Date.now();
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return;
-      if (Date.now() - lastPull < 20000) return;
-      lastPull = Date.now();
-      syncBlocksFromSupabase().then(() => pushUnsyncedBlocks()).catch(() => {});
+    // Become the active device first, then pull the account's latest blocks, so
+    // this device starts from exactly what the previous device left.
+    claimSession()
+      .then(() => syncBlocksFromSupabase())
+      .then(() => pushUnsyncedBlocks())
+      .catch(() => {});
+
+    const lock = () => { replacedRef.current = true; setReplaced(true); };
+    window.addEventListener(SESSION_REPLACED_EVENT, lock);
+
+    // While the app is on screen: confirm this is still the active device and
+    // pull only what changed (cheap). Also runs the moment the app comes back.
+    let busy = false;
+    const tick = async () => {
+      if (busy || document.visibilityState !== 'visible' || replacedRef.current) return;
+      busy = true;
+      try {
+        const active = await checkSession();
+        if (!active) { lock(); return; }
+        await syncBlocksFromSupabase(undefined, undefined, false);
+        await pushUnsyncedBlocks();
+      } catch { /* never interrupt the app */ } finally { busy = false; }
     };
+    const iv = setInterval(tick, 15000);
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener(SESSION_REPLACED_EVENT, lock);
+    };
   }, []);
+
+  const takeOver = async () => {
+    setTakingOver(true);
+    try {
+      await claimSession();
+      await syncBlocksFromSupabase();
+      await pushUnsyncedBlocks();
+    } catch { /* ignore */ }
+    replacedRef.current = false;
+    setReplaced(false);
+    setTakingOver(false);
+    setRefreshKey((k) => k + 1);
+  };
 
   // Navigation history so every "Back" returns to the previous page.
   const historyRef = useRef<{ view: string; params: any }[]>([]);
@@ -131,6 +168,30 @@ export default function App() {
 
   if (showIntro) {
     return <CinematicIntro onComplete={() => setShowIntro(false)} />;
+  }
+
+  if (replaced) {
+    return (
+      <div className="min-h-screen bg-[#07090c] text-slate-100 flex items-center justify-center p-4" dir="rtl">
+        <div className="max-w-md w-full rounded-3xl p-7 text-center space-y-4" style={{ border: '1px solid rgba(79,214,236,.25)', background: 'linear-gradient(160deg,rgba(79,214,236,.08),rgba(207,239,248,.02))', boxShadow: '0 30px 80px -40px rgba(79,214,236,.45)' }}>
+          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto" style={{ background: 'rgba(79,214,236,.1)', border: '1px solid rgba(79,214,236,.3)' }}>
+            <ShieldAlert className="w-8 h-8 text-cyan-300" />
+          </div>
+          <h2 className="text-lg font-bold text-white">تم تسجيل الدخول من جهاز آخر</h2>
+          <p className="text-sm text-slate-400 leading-relaxed">
+            حسابك يعمل على جهاز واحد فقط في نفس الوقت. إذا أردت المتابعة من هذا الجهاز، سيتوقف الجهاز الآخر تلقائياً، ويبقى تقدمك محفوظاً.
+          </p>
+          <button
+            onClick={takeOver}
+            disabled={takingOver}
+            className="w-full min-h-[52px] rounded-2xl font-bold text-sm disabled:opacity-60"
+            style={{ background: 'linear-gradient(180deg,#DDF4FB,#BFE6F2)', color: '#03131B' }}
+          >
+            {takingOver ? 'جاري التفعيل...' : 'استخدام هذا الجهاز'}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (isAccountInactive) {
