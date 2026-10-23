@@ -337,75 +337,89 @@ async function startServer() {
     return { count: recent.length, suspicious };
   }
 
-  const MAX_CONCURRENT_SESSIONS = 2;
+  // One device at a time for students; the newest device wins. The admin
+  // is never limited. The registry lives in users.session_id as a one-item
+  // JSON array [{id, updatedAt}] (same column the old guard used).
+  //   claim: this device becomes the active one (kicks any other device).
+  //   touch: ok only if this device is the active one (or none is recorded).
+  function isAdminRow(userRow: any): boolean {
+    return (
+      verifyServerAdminAuthorization(String(userRow?.telegram_id ?? '')) ||
+      verifyServerAdminAuthorization(userRow?.telegram_username || '')
+    );
+  }
 
-  async function checkAndRegisterSession(userDbId: string, incomingSessionId: string | null): Promise<{ ok: boolean; reason?: string }> {
+  async function resolveSessionState(
+    userRow: any,
+    incomingSessionId: string | null,
+    mode: 'claim' | 'touch'
+  ): Promise<{ ok: boolean; admin?: boolean; reason?: string }> {
     const supabase = getSupabase();
-    if (!supabase || !userDbId || !incomingSessionId) {
-      return { ok: true }; // Fail open: no session id sent (older client) — don't block.
-    }
+    if (!supabase || !userRow?.id || !incomingSessionId) return { ok: true }; // older client / no DB: never block
+    if (isAdminRow(userRow)) return { ok: true, admin: true };
 
-    const { data: userRow, error: selectErr } = await supabase
+    const { data: row, error: selectErr } = await supabase
       .from('users')
       .select('session_id')
-      .eq('id', userDbId)
+      .eq('id', userRow.id)
       .maybeSingle();
-
     if (selectErr) {
       if (selectErr.code === '42703') {
-        console.warn('[SESSION_GUARD] users.session_id column not found — session limiting is disabled until the migration is applied.');
-        return { ok: true };
+        console.warn('[SESSION_GUARD] users.session_id column not found — session limiting is disabled until migration 016 is applied.');
+      } else {
+        console.error(`[SESSION_GUARD] Failed to read session state: ${selectErr.message}`);
       }
-      console.error(`[SESSION_GUARD] Failed to read session state for userDbId=${userDbId}: ${selectErr.message}`);
-      return { ok: true }; // Fail open on unexpected errors — never block legitimate access due to an infra hiccup.
+      return { ok: true }; // fail open
     }
 
-    // Sessions are stored as a JSON array of {id, updatedAt} in the same
-    // session_id text column (no extra migration needed to raise the limit
-    // from 1 to N later). Anything unparsable (empty, legacy plain string
-    // from before this change) is treated as "no active sessions".
-    let activeSessions: { id: string; updatedAt: number }[] = [];
+    let activeId: string | null = null;
     try {
-      const raw = userRow?.session_id;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) activeSessions = parsed;
+      const parsed = row?.session_id ? JSON.parse(row.session_id) : null;
+      if (Array.isArray(parsed) && parsed[0]?.id) activeId = String(parsed[0].id);
+    } catch { activeId = null; }
+
+    if (mode === 'touch' && activeId && activeId !== incomingSessionId) {
+      return { ok: false, reason: 'تم تسجيل الدخول إلى حسابك من جهاز آخر. استخدم هذا الجهاز لإعادة التفعيل.' };
+    }
+    if (mode === 'claim' || !activeId) {
+      const { error: updateErr } = await supabase
+        .from('users')
+        .update({ session_id: JSON.stringify([{ id: incomingSessionId, updatedAt: Date.now() }]), session_updated_at: new Date().toISOString() })
+        .eq('id', userRow.id);
+      if (updateErr && updateErr.code !== '42703') {
+        console.error(`[SESSION_GUARD] Failed to register session: ${updateErr.message}`);
       }
-    } catch {
-      activeSessions = [];
     }
-
-    const now = Date.now();
-    // Drop stale entries (no activity for SESSION_TIMEOUT_MS) — an
-    // abandoned old tab/device shouldn't permanently occupy a slot.
-    activeSessions = activeSessions.filter((s) => now - s.updatedAt < SESSION_TIMEOUT_MS);
-
-    const existingIdx = activeSessions.findIndex((s) => s.id === incomingSessionId);
-    if (existingIdx === -1 && activeSessions.length >= MAX_CONCURRENT_SESSIONS) {
-      console.log(`[SESSION_GUARD] Rejected session for userDbId=${userDbId} — ${activeSessions.length} active sessions already (limit=${MAX_CONCURRENT_SESSIONS}).`);
-      return {
-        ok: false,
-        reason: `يبدو أنك تستخدم حسابك من ${MAX_CONCURRENT_SESSIONS} أجهزة أخرى حالياً. أغلق إحدى الجلسات وأعد المحاولة.`
-      };
-    }
-
-    if (existingIdx >= 0) {
-      activeSessions[existingIdx].updatedAt = now;
-    } else {
-      activeSessions.push({ id: incomingSessionId, updatedAt: now });
-    }
-
-    const { error: updateErr } = await supabase
-      .from('users')
-      .update({ session_id: JSON.stringify(activeSessions), session_updated_at: new Date().toISOString() })
-      .eq('id', userDbId);
-
-    if (updateErr && updateErr.code !== '42703') {
-      console.error(`[SESSION_GUARD] Failed to register session for userDbId=${userDbId}: ${updateErr.message}`);
-    }
-
     return { ok: true };
   }
+
+  app.post("/api/session/claim", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || '') as string;
+      const sessionId = String(req.headers['x-session-id'] || req.body?.sessionId || '').slice(0, 100) || null;
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.json({ success: true, active: true });
+      const r = await resolveSessionState(userRow, sessionId, 'claim');
+      return res.json({ success: true, active: r.ok, admin: !!r.admin });
+    } catch (err: any) {
+      return res.json({ success: false, active: true, error: err.message }); // never lock a user out on a server hiccup
+    }
+  });
+
+  app.get("/api/session/check", async (req, res) => {
+    try {
+      const requesterId = (req.headers['x-telegram-user-id'] || '') as string;
+      const requesterUsername = (req.headers['x-telegram-username'] || '') as string;
+      const sessionId = String(req.headers['x-session-id'] || req.query.sessionId || '').slice(0, 100) || null;
+      const userRow = await getOrCreateSupabaseUser(requesterId, requesterUsername);
+      if (!userRow?.id) return res.json({ success: true, active: true });
+      const r = await resolveSessionState(userRow, sessionId, 'touch');
+      return res.json({ success: true, active: r.ok, admin: !!r.admin });
+    } catch (err: any) {
+      return res.json({ success: false, active: true, error: err.message });
+    }
+  });
 
   // --- User profile (full name + phone) validation & save ---
   // Requirement: reject obvious junk ("test", "aaa", digits-only, the literal
@@ -2521,9 +2535,9 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
 
       // Single-active-session enforcement (see checkAndRegisterSession above).
       const incomingSessionId = (req.headers['x-session-id'] || req.body?.sessionId || null) as string | null;
-      const sessionCheck = await checkAndRegisterSession(userRow.id, incomingSessionId);
+      const sessionCheck = await resolveSessionState(userRow, incomingSessionId, 'touch');
       if (!sessionCheck.ok) {
-        return res.status(409).json({ error: sessionCheck.reason, code: 'SESSION_CONFLICT' });
+        return res.status(409).json({ error: sessionCheck.reason, code: 'SESSION_REPLACED' });
       }
 
       recordBlockActivity(userRow.id);
@@ -2629,6 +2643,13 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
         query = query.eq('bank_id', bankIdFilter);
       }
 
+      // Incremental pull: only blocks changed after `since` (ISO time from a previous response).
+      const sinceRaw = req.query.since ? String(req.query.since) : '';
+      if (sinceRaw && !Number.isNaN(Date.parse(sinceRaw))) {
+        query = query.gt('updated_at', new Date(Date.parse(sinceRaw)).toISOString());
+      }
+      const serverTime = new Date().toISOString();
+
       const { data: rows, error } = await query.order('updated_at', { ascending: false });
 
       if (error) {
@@ -2638,7 +2659,7 @@ Specialty: ${question.major || 'N/A'} — ${question.topic || 'N/A'}`;
 
       const mappedBlocks = (rows || []).map((row: any) => mapDbRowToBlock(row, requesterId || userRow.telegram_id));
 
-      return res.json({ blocks: mappedBlocks });
+      return res.json({ blocks: mappedBlocks, serverTime });
     } catch (err: any) {
       console.error("Error in GET /api/blocks:", err);
       return res.status(500).json({ error: err.message || "Failed to fetch blocks." });
