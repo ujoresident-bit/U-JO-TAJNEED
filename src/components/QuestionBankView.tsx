@@ -1,3 +1,4 @@
+import { useBlocksSynced } from './useBlocksSynced';
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   Filter,
@@ -20,6 +21,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { PerfStyles, CountUp } from './PerfKit';
+import MajorsMap from './MajorsMap';
 import {
   getQuestionBankMeta,
   getFilteredQuestions,
@@ -47,6 +49,94 @@ interface QuestionBankViewProps {
   onNavigate: (view: string, params?: any) => void;
   bankId?: string;
 }
+
+const QB_CSS = `
+.qb{--ink:#EAF1F7;--dim:#93A3B6;--ice:#CFEFF8;--cy:#4FD6EC;--am:#E8B66A;--gr:#6FE0B4;--rose:#FF8FA3;--serif:'Instrument Serif',Georgia,serif;--sans:'Geist',system-ui,sans-serif;--mono:'Geist Mono',ui-monospace,monospace;color:var(--ink);font-family:var(--sans);max-width:1040px;margin:0 auto;overflow-x:clip}
+.qb *{box-sizing:border-box}
+.qb button{font-family:inherit;cursor:pointer}
+.qb button:focus-visible{outline:2px solid var(--cy);outline-offset:3px}
+.qb-mono{font:500 10.5px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.qb-trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;max-width:55vw;vertical-align:bottom}
+.qb-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.qb-tl{display:flex;gap:8px;flex-wrap:wrap}
+.qb-tbtn{min-height:40px;padding:0 14px;border-radius:999px;border:1px solid rgba(207,239,248,.14);background:rgba(207,239,248,.04);color:var(--dim);font:500 12px var(--sans);display:inline-flex;align-items:center;gap:6px}
+.qb-tbtn:hover:not(:disabled){color:var(--ink)}
+.qb-tbtn.danger{color:var(--rose);border-color:rgba(255,143,163,.3)}
+.qb-tbtn:disabled{opacity:.45;cursor:not-allowed}
+.qb-hero{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;align-items:end;margin-top:14px}
+.qb-h1{margin:8px 0 0;font:400 clamp(42px,11vw,72px)/.96 var(--serif);letter-spacing:-.015em;color:var(--ink)}
+.qb-h1 em{color:var(--ice)}
+.qb-sub{margin:10px 0 0;color:var(--dim);font-size:14px;line-height:1.5;max-width:38ch}
+.qb-net{position:relative;height:300px;margin:6px -4px 0}
+.qb-net canvas{width:100%;height:100%;display:block;cursor:grab}
+.qb-nethint{margin:0;text-align:center}
+@media(min-width:860px){.qb-hero{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:24px}.qb-net{height:430px;margin:0}}
+.qb-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:28px;margin-top:18px}
+@media(min-width:860px){.qb-grid{grid-template-columns:minmax(0,1fr) 340px;gap:36px;align-items:start}}
+.qb-sec{margin-top:26px}.qb-sec:first-child{margin-top:0}
+.qb-sh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px}
+.qb-sh h2{margin:0;font:400 26px/1 var(--serif);color:var(--ink)}
+.qb-sh .qb-mono{white-space:nowrap}
+.qb-tiles{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 8px;margin:0 -2px;scrollbar-width:none}
+.qb-tiles::-webkit-scrollbar{display:none}
+.qb-tile{flex:0 0 auto;min-width:118px;text-align:left;padding:14px 16px;border-radius:20px;border:1px solid rgba(207,239,248,.09);background:linear-gradient(160deg,rgba(207,239,248,.05),rgba(207,239,248,.012));color:var(--ink);transition:all .3s}
+.qb-tile b{display:block;font:400 32px/1 var(--serif);font-variant-numeric:tabular-nums;margin-top:8px}
+.qb-tile[aria-pressed=true]{border-color:rgba(var(--t),.55);background:linear-gradient(160deg,rgba(var(--t),.16),rgba(var(--t),.03));box-shadow:0 18px 50px -24px rgba(var(--t),.6)}
+.qb-tile[aria-pressed=true] .qb-mono{color:rgb(var(--t))}
+.t-all{--t:79,214,236}.t-done{--t:111,224,180}.t-inc{--t:232,182,106}.t-new{--t:180,168,245}
+.qb-chips{display:flex;flex-wrap:wrap;gap:8px}
+.qb-chip{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:0 15px;border-radius:999px;border:1px solid rgba(207,239,248,.13);background:rgba(207,239,248,.035);color:#D3DDE8;font:500 13.5px var(--sans);transition:all .25s;max-width:100%}
+.qb-chip i{font:500 11px var(--mono);font-style:normal;color:var(--dim);font-variant-numeric:tabular-nums}
+.qb-chip:hover{border-color:rgba(79,214,236,.45)}
+.qb-chip[aria-pressed=true]{background:linear-gradient(180deg,#DDF4FB,#BFE6F2);color:#03131B;border-color:transparent;box-shadow:0 10px 30px -14px rgba(79,214,236,.7)}
+.qb-chip[aria-pressed=true] i{color:#33576a}
+.qb-seg{display:inline-grid;grid-auto-flow:column;gap:4px;padding:4px;border-radius:16px;background:rgba(207,239,248,.05);max-width:100%;overflow-x:auto}
+.qb-seg button{min-height:42px;padding:0 18px;border:0;border-radius:12px;background:none;color:var(--dim);font:600 13px var(--sans);white-space:nowrap}
+.qb-seg button[aria-pressed=true]{background:rgba(79,214,236,.18);color:var(--cy)}
+.qb-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:16px 18px;border-radius:20px;border:1px solid rgba(207,239,248,.09);background:linear-gradient(160deg,rgba(207,239,248,.05),rgba(207,239,248,.012));color:var(--ink)}
+.qb-row:hover{border-color:rgba(79,214,236,.4)}
+.qb-row b{display:block;font:400 22px/1.1 var(--serif)}
+.qb-row .s{display:block;margin-top:4px;color:var(--dim);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qb-selt{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.qb-selt .qb-chip{min-height:32px;padding:0 11px;font-size:12px;background:rgba(79,214,236,.12);border-color:rgba(79,214,236,.35);color:var(--ice)}
+.qb-aside{display:none}
+@media(min-width:860px){.qb-aside{display:block}}
+.qb-block{border-radius:26px;padding:22px;border:1px solid rgba(79,214,236,.22);background:linear-gradient(160deg,rgba(79,214,236,.09),rgba(207,239,248,.02) 60%);box-shadow:0 30px 80px -44px rgba(79,214,236,.45);position:sticky;top:76px}
+.qb-ring{position:relative;width:132px;height:132px;margin:2px auto 6px}
+.qb-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.qb-ring .c{position:absolute;inset:0;display:grid;place-items:center;text-align:center}
+.qb-ring b{display:block;font:400 40px/1 var(--serif);font-variant-numeric:tabular-nums}
+.qb-ring .qb-mono{font-size:9.5px}
+.qb-len{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.qb-len button{min-height:44px;border-radius:12px;border:1px solid rgba(207,239,248,.13);background:rgba(207,239,248,.035);color:var(--ink);font:500 14px var(--mono)}
+.qb-len button[aria-pressed=true]{background:rgba(79,214,236,.2);border-color:rgba(79,214,236,.6);color:var(--cy)}
+.qb-sum{margin:16px 0 0;padding:0;list-style:none;display:grid;gap:8px;font-size:12.5px}
+.qb-sum li{display:flex;justify-content:space-between;gap:14px}
+.qb-sum li span:first-child{color:var(--dim);flex:none}
+.qb-sum li span:last-child{text-align:right;color:#D8E2EC;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qb-go{margin-top:18px;width:100%;min-height:58px;border:0;border-radius:16px;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 22px;font:600 15px var(--sans);color:#03131B;background:linear-gradient(180deg,#DDF4FB,#BFE6F2);box-shadow:0 14px 50px -14px rgba(79,214,236,.65);transition:transform .25s}
+.qb-go:hover:not(:disabled){transform:translateY(-2px)}
+.qb-go .a{width:40px;height:40px;border-radius:12px;background:#03131B;color:var(--ice);display:grid;place-items:center;flex:none}
+.qb-go:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.qb-go.sub-b{background:linear-gradient(180deg,#F6D9A6,#E8B66A);color:#1a1204}.qb-go.sub-b .a{background:#1a1204;color:var(--am)}
+.qb-warn{margin-top:14px;padding:12px 14px;border-radius:14px;border:1px solid rgba(232,182,106,.3);background:rgba(232,182,106,.08);color:#F2D9A8;font-size:12.5px;line-height:1.5}
+.qb-err{margin-top:14px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,143,163,.35);background:rgba(255,143,163,.08);color:var(--rose);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.qb-ok{margin-top:14px;padding:12px 14px;border-radius:14px;border:1px solid rgba(111,224,180,.35);background:rgba(111,224,180,.08);color:var(--gr);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.qb-card{padding:18px;border-radius:22px;border:1px solid rgba(207,239,248,.1);background:linear-gradient(160deg,rgba(207,239,248,.05),rgba(207,239,248,.012))}
+.qb-amber{border-color:rgba(232,182,106,.3)}
+.qb-pulse{animation:pf-fade 1.2s ease infinite alternate}
+.qb-modal{position:relative;width:100%;max-width:440px;padding:22px;border-radius:24px;border:1px solid rgba(255,143,163,.3);background:linear-gradient(180deg,#10161d,#0a0e13);display:grid;gap:16px}
+.qb-x{position:absolute;top:12px;right:12px;width:38px;height:38px;border-radius:12px;border:0;background:none;color:var(--dim);display:grid;place-items:center}
+.qb-mi{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;color:var(--rose);border:1px solid rgba(255,143,163,.3);background:rgba(255,143,163,.08);flex:none}
+.qb-mh{margin:0;font:400 24px/1.1 var(--serif);color:var(--ink)}
+.qb-mb{font-size:12.5px;line-height:1.55;color:var(--dim);padding:14px;border-radius:14px;background:rgba(0,0,0,.35);border:1px solid rgba(207,239,248,.08)}
+.qb-bar{position:fixed;left:0;right:0;bottom:0;z-index:20;padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));background:linear-gradient(180deg,rgba(7,9,12,0),rgba(7,9,12,.92) 30%);pointer-events:none}
+.qb-bar .in{pointer-events:auto;display:flex;align-items:center;gap:12px;max-width:1040px;margin:0 auto;padding:10px 10px 10px 18px;border-radius:20px;border:1px solid rgba(79,214,236,.28);background:#0c141a;box-shadow:0 20px 60px -20px rgba(79,214,236,.5)}
+.qb-bar .n{font:400 30px/1 var(--serif);font-variant-numeric:tabular-nums}
+.qb-bar .qb-go{margin:0 0 0 auto;flex:1;min-height:52px;max-width:260px}
+@media(min-width:860px){.qb-bar{display:none}}
+@media(prefers-reduced-motion:reduce){.qb *{animation:none!important;transition:none!important}}
+`;
 
 // Searchable multi-select sheet for topics (there can be hundreds of them).
 const TopicPicker: React.FC<{
@@ -104,7 +194,7 @@ const TopicPicker: React.FC<{
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search topics..."
-              className="w-full pl-10 pr-9 py-3 rounded-xl bg-white/[0.05] border border-white/[0.08] focus:border-purple-400/60 focus:bg-white/[0.07] outline-none text-sm text-slate-100 placeholder:text-slate-600 transition-colors"
+              className="w-full pl-10 pr-9 py-3 rounded-xl bg-white/[0.05] border border-white/[0.08] focus:border-cyan-400/60 focus:bg-white/[0.07] outline-none text-sm text-slate-100 placeholder:text-slate-600 transition-colors"
             />
             {query && (
               <button onClick={() => setQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-lg text-slate-500 hover:text-white" aria-label="Clear search">
@@ -115,7 +205,7 @@ const TopicPicker: React.FC<{
           {selCount > 0 && (
             <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
               {selected.map((t) => (
-                <button key={t} onClick={() => onToggle(t)} className="pf-pop inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/20 border border-purple-400/40 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/30">
+                <button key={t} onClick={() => onToggle(t)} className="pf-pop inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/30">
                   <span className="max-w-[10rem] truncate">{t}</span><X className="w-3 h-3" />
                 </button>
               ))}
@@ -127,9 +217,9 @@ const TopicPicker: React.FC<{
           {!q && (
             <button
               onClick={onClear}
-              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors ${isAll ? 'bg-purple-500/15 border border-purple-400/40' : 'hover:bg-white/[0.05] border border-transparent'}`}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors ${isAll ? 'bg-cyan-500/15 border border-cyan-400/40' : 'hover:bg-white/[0.05] border border-transparent'}`}
             >
-              <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${isAll ? 'bg-purple-400 border-purple-300' : 'border-white/20'}`}>
+              <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${isAll ? 'bg-cyan-400 border-cyan-300' : 'border-white/20'}`}>
                 {isAll && <Check className="w-3.5 h-3.5 text-slate-950 pf-check" />}
               </span>
               <span className="flex-1 text-sm font-semibold text-slate-100">All topics</span>
@@ -144,9 +234,9 @@ const TopicPicker: React.FC<{
                 <button
                   key={t}
                   onClick={() => onToggle(t)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors border ${on ? 'bg-purple-500/15 border-purple-400/40' : 'border-transparent hover:bg-white/[0.05]'}`}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors border ${on ? 'bg-cyan-500/15 border-cyan-400/40' : 'border-transparent hover:bg-white/[0.05]'}`}
                 >
-                  <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${on ? 'bg-purple-400 border-purple-300' : 'border-white/20'}`}>
+                  <span className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${on ? 'bg-cyan-400 border-cyan-300' : 'border-white/20'}`}>
                     {on && <Check className="w-3.5 h-3.5 text-slate-950 pf-check" />}
                   </span>
                   <span className="flex-1 text-sm text-slate-200">{t}</span>
@@ -167,7 +257,7 @@ const TopicPicker: React.FC<{
           </button>
           <button
             onClick={onClose}
-            className="flex-1 py-3 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 text-xs font-black uppercase tracking-wider shadow-lg shadow-purple-500/25 active:scale-[.98] transition-all"
+            className="flex-1 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black uppercase tracking-wider shadow-lg shadow-cyan-500/25 active:scale-[.98] transition-all"
           >
             {isAll ? 'Done' : `Done · ${selCount} selected`}
           </button>
@@ -178,6 +268,7 @@ const TopicPicker: React.FC<{
 };
 
 export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, bankId = 'moh_bank' }) => {
+  const syncTick = useBlocksSynced();
   const canonicalUser = getCurrentUser();
   const [currentSession, setCurrentSession] = useState(() => resolveSession(canonicalUser.telegramId));
   const [isSubscribed, setIsSubscribed] = useState<boolean>(false);
@@ -304,7 +395,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   // Compute status sets for current user
   const statusSets = useMemo(() => {
     return getUserQuestionStatusSets(user.telegramId);
-  }, [user.telegramId, resetCount]);
+  }, [user.telegramId, resetCount, syncTick]);
 
   // Compute available topics based on selected Majors
   const availableTopics = useMemo(() => {
@@ -584,442 +675,217 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
     return `No questions match the selected filter criteria.`;
   };
 
+  const poolSize = nonStatusMatchingQuestions.length;
+  const startDisabled = matchingQuestions.length === 0 || subscriptionLoading;
+  const startLabel = subscriptionLoading ? "Checking subscription..." : matchingQuestions.length === 0 ? "No questions available" : !isSubscribed ? "Subscribe to start" : "Start practice block";
+
   return (
-    <div className="space-y-6 pb-12">
+    <div className="qb pb-40 md:pb-12">
       <PerfStyles />
-      {/* Header Banner */}
-      <div className="pf-rise glass-panel p-6 relative overflow-hidden" style={{ background: 'radial-gradient(520px 200px at 0% 0%, rgba(34,211,238,.10), transparent 70%), var(--surface)' }}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-[#00F2FF] text-[10px] font-semibold uppercase tracking-wider">
-              <BookOpen className="w-3.5 h-3.5" />
-              <span>{bankMeta.name}</span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-100">
-              Create Question Block
-            </h1>
-            <p className="text-xs text-slate-400 max-w-xl">
-              Configure exam filters by question status, specialty major, topic, exam year, or difficulty level to assemble your practice block.
-            </p>
-          </div>
+      <style>{QB_CSS}</style>
 
-          <div className="flex items-center gap-2 flex-wrap self-start md:self-auto">
-            <button
-              onClick={handleResetFilters}
-              className="px-3.5 py-2 rounded-xl glass-panel text-slate-300 text-xs font-semibold border border-white/10 hover:bg-white/5 flex items-center gap-1.5 transition-all cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              <span>Reset Filters</span>
-            </button>
-
-            <button
-              onClick={() => setShowResetModal(true)}
-              disabled={resetCount >= 3}
-              title={
-                resetCount >= 3
-                  ? 'Reset limit reached. You have used all 3 available resets.'
-                  : 'Reset your question-bank progress'
-              }
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center gap-1.5 transition-all cursor-pointer ${
-                resetCount >= 3
-                  ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed opacity-60'
-                  : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30'
-              }`}
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
-              <span>Reset Progress ({resetCount}/3)</span>
-            </button>
-          </div>
+      <div className="qb-top">
+        <span className="qb-mono" style={{ color: 'var(--cy)' }}>{bankMeta.name}</span>
+        <div className="qb-tl">
+          <button className="qb-tbtn" onClick={handleResetFilters}>
+            <RotateCcw size={13} /> Reset filters
+          </button>
+          <button
+            className="qb-tbtn danger"
+            onClick={() => setShowResetModal(true)}
+            disabled={resetCount >= 3}
+            title={resetCount >= 3 ? 'Reset limit reached. You have used all 3 available resets.' : 'Reset your question-bank progress'}
+          >
+            <RefreshCw size={13} /> Reset progress ({resetCount}/3)
+          </button>
         </div>
-
-        {resetCount >= 3 && (
-          <div className="mt-3 text-[11px] text-amber-400 font-medium flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-lg max-w-fit">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            <span>Reset limit reached. You have used all 3 available resets.</span>
-          </div>
-        )}
       </div>
 
-      {/* Confirmation Modal for Reset Progress */}
+      {resetCount >= 3 && (
+        <div className="qb-warn" style={{ marginTop: 10 }}>
+          <AlertTriangle size={14} style={{ display: 'inline', marginRight: 6, verticalAlign: '-2px' }} />
+          Reset limit reached. You have used all 3 available resets.
+        </div>
+      )}
+
       {showResetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="glass-panel border-rose-500/30 p-6 max-w-md w-full space-y-4 shadow-2xl relative">
-            <button
-              onClick={() => setShowResetModal(false)}
-              className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-white/10 transition-all cursor-pointer"
-            >
-              <X className="w-5 h-5" />
+          <div className="qb-modal">
+            <button onClick={() => setShowResetModal(false)} className="qb-x" aria-label="Close">
+              <X size={18} />
             </button>
-
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                <RefreshCw className="w-6 h-6" />
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div className="qb-mi"><RefreshCw size={22} /></div>
               <div>
-                <h3 className="text-base font-bold text-slate-100">
-                  Reset Question-Bank Progress
-                </h3>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-                  {resetCount} / 3 Resets Used
-                </span>
+                <h3 className="qb-mh">Reset question-bank progress</h3>
+                <span className="qb-mono" style={{ color: 'var(--rose)' }}>{resetCount} / 3 resets used</span>
               </div>
             </div>
-
-            <div className="space-y-3 text-xs text-slate-300 leading-relaxed bg-black/40 p-4 rounded-xl border border-white/10">
-              <p className="font-semibold text-slate-100">
-                Are you sure you want to reset your question-bank progress?
-              </p>
-              <p className="text-slate-400">
-                This will reset all completed, uncompleted, and used-question progress and return the question bank to its initial state.
-              </p>
-              <p className="text-emerald-400 font-medium">
-                Your questions, account, subscription, and other data will not be deleted.
-              </p>
+            <div className="qb-mb">
+              <p style={{ color: 'var(--ink)', fontWeight: 600, margin: 0 }}>Are you sure you want to reset your question-bank progress?</p>
+              <p style={{ margin: '8px 0 0' }}>This will reset all completed, uncompleted, and used-question progress and return the question bank to its initial state.</p>
+              <p style={{ margin: '8px 0 0', color: 'var(--gr)' }}>Your questions, account, subscription, and other data will not be deleted.</p>
             </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                onClick={() => setShowResetModal(false)}
-                className="px-4 py-2.5 rounded-xl glass-panel text-slate-300 font-semibold text-xs border border-white/10 hover:bg-white/5 transition-all cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmResetProgress}
-                disabled={isResetting}
-                className="px-5 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-rose-500/20 cursor-pointer disabled:opacity-50"
-              >
-                {isResetting ? 'Resetting...' : 'Confirm Reset'}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="qb-tbtn" style={{ minHeight: 46, padding: '0 18px' }} onClick={() => setShowResetModal(false)}>Cancel</button>
+              <button className="qb-tbtn danger" style={{ minHeight: 46, padding: '0 18px', background: 'rgba(255,143,163,.14)' }} onClick={handleConfirmResetProgress} disabled={isResetting}>
+                {isResetting ? 'Resetting...' : 'Confirm reset'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Success Banner */}
       {resetSuccessMsg && (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center gap-2 animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-          <span className="font-semibold">{resetSuccessMsg}</span>
+        <div className="qb-ok">
+          <CheckCircle2 size={16} style={{ flex: 'none' }} />
+          <span>{resetSuccessMsg}</span>
         </div>
       )}
 
-      {/* Interactive Question Status Counters Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* All Questions */}
-        <button
-          type="button"
-          onClick={() => setSelectedStatusFilter('ALL')}
-          style={{ animationDelay: '0.08s' }}
-          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
-            selectedStatusFilter === 'ALL'
-              ? 'bg-cyan-500/20 border-cyan-400 ring-2 ring-cyan-400/50 shadow-lg shadow-cyan-500/20'
-              : 'glass-panel border-cyan-500/20 opacity-75 hover:opacity-100 hover:border-cyan-500/50'
-          }`}
-        >
-          <div className="flex items-center justify-between text-slate-400 mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-              All Questions
-              {selectedStatusFilter === 'ALL' && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-cyan-400 text-slate-950">
-                  Active
-                </span>
-              )}
-            </span>
-            <BookOpen className="w-4 h-4 text-[#00F2FF]" />
-          </div>
-          <div className="text-2xl font-black text-[#00F2FF]">
-            <CountUp value={statusCounts.allCount} duration={900} />
-          </div>
-          <div className="text-[10px] text-slate-400 font-medium mt-1">
-            All matching current filters
-          </div>
-        </button>
+      {/* Hero + 3D constellation of majors */}
+      <section className="qb-hero">
+        <div>
+          <div className="qb-mono" style={{ color: 'var(--cy)' }}>Past years</div>
+          <h1 className="qb-h1">Build your <em>block</em></h1>
+          <p className="qb-sub">Choose what to practise. The count updates as you filter, then start when it looks right.</p>
+        </div>
+        <div>
+          {bankMeta.majors.length > 0 ? (
+            <MajorsMap
+              majors={bankMeta.majors.map((m) => ({ name: m.name, count: majorQuestionCounts[m.name] ?? 0 }))}
+              selected={selectedMajors.includes('All') ? [] : selectedMajors}
+              onToggle={handleToggleMajor}
+            />
+          ) : null}
+          <p className="qb-mono qb-nethint">Drag to rotate. Tap a bright point to select that major.</p>
+        </div>
+      </section>
 
-        {/* Complete Questions */}
-        <button
-          type="button"
-          onClick={() => setSelectedStatusFilter('COMPLETE')}
-          style={{ animationDelay: '0.15s' }}
-          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
-            selectedStatusFilter === 'COMPLETE'
-              ? 'bg-emerald-500/20 border-emerald-400 ring-2 ring-emerald-400/50 shadow-lg shadow-emerald-500/20'
-              : 'glass-panel border-emerald-500/20 opacity-75 hover:opacity-100 hover:border-emerald-500/50'
-          }`}
-        >
-          <div className="flex items-center justify-between text-slate-400 mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-              Complete
-              {selectedStatusFilter === 'COMPLETE' && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-emerald-400 text-slate-950">
-                  Active
-                </span>
-              )}
-            </span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          </div>
-          <div className="text-2xl font-black text-emerald-400">
-            <CountUp value={statusCounts.completeCount} duration={900} />
-          </div>
-          <div className="text-[10px] text-slate-400 font-medium mt-1">
-            Questions answered in bank
-          </div>
-        </button>
-
-        {/* Uncompleted Questions */}
-        <button
-          type="button"
-          onClick={() => setSelectedStatusFilter('UNCOMPLETED')}
-          style={{ animationDelay: '0.22s' }}
-          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
-            selectedStatusFilter === 'UNCOMPLETED'
-              ? 'bg-amber-500/20 border-amber-400 ring-2 ring-amber-400/50 shadow-lg shadow-amber-500/20'
-              : 'glass-panel border-amber-500/20 opacity-75 hover:opacity-100 hover:border-amber-500/50'
-          }`}
-        >
-          <div className="flex items-center justify-between text-slate-400 mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-              Uncompleted
-              {selectedStatusFilter === 'UNCOMPLETED' && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-amber-400 text-slate-950">
-                  Active
-                </span>
-              )}
-            </span>
-            <Clock className="w-4 h-4 text-amber-400" />
-          </div>
-          <div className="text-2xl font-black text-amber-400">
-            <CountUp value={statusCounts.uncompletedCount} duration={900} />
-          </div>
-          <div className="text-[10px] text-slate-400 font-medium mt-1">
-            Encountered but unanswered
-          </div>
-        </button>
-
-        {/* Unused Questions */}
-        <button
-          type="button"
-          onClick={() => setSelectedStatusFilter('UNUSED')}
-          style={{ animationDelay: '0.29s' }}
-          className={`pf-rise pf-lift p-4 rounded-2xl text-left cursor-pointer relative overflow-hidden border ${
-            selectedStatusFilter === 'UNUSED'
-              ? 'bg-purple-500/20 border-purple-400 ring-2 ring-purple-400/50 shadow-lg shadow-purple-500/20'
-              : 'glass-panel border-purple-500/20 opacity-75 hover:opacity-100 hover:border-purple-500/50'
-          }`}
-        >
-          <div className="flex items-center justify-between text-slate-400 mb-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
-              Unused
-              {selectedStatusFilter === 'UNUSED' && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-400 text-slate-950">
-                  Active
-                </span>
-              )}
-            </span>
-            <HelpCircle className="w-4 h-4 text-purple-400" />
-          </div>
-          <div className="text-2xl font-black text-purple-400">
-            <CountUp value={statusCounts.unusedCount} duration={900} />
-          </div>
-          <div className="text-[10px] text-slate-400 font-medium mt-1">
-            Never started or encountered
-          </div>
-        </button>
-      </div>
-
-      {/* Empty State Banner if 0 Questions in Database */}
       {bankMeta.totalQuestions === 0 && (
-        <div className="glass-panel border-cyan-500/30 p-8 text-center space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-[#00F2FF] flex items-center justify-center mx-auto shadow-lg shadow-cyan-500/10">
-            <BookOpen className="w-6 h-6" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-base font-bold text-slate-100">0 Questions Available</h3>
-            <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-              No questions have been imported yet. Please import a question bank from the Admin Question Bank Import section to get started.
-            </p>
-          </div>
+        <div className="qb-card" style={{ textAlign: 'center', marginTop: 18 }}>
+          <div className="qb-mi" style={{ margin: '0 auto 10px', color: 'var(--cy)', borderColor: 'rgba(79,214,236,.3)', background: 'rgba(79,214,236,.08)' }}><BookOpen size={22} /></div>
+          <h3 className="qb-mh">0 Questions Available</h3>
+          <p style={{ color: 'var(--dim)', fontSize: 13, lineHeight: 1.5, margin: '6px auto 0', maxWidth: 420 }}>
+            No questions have been imported yet. Please import a question bank from the Admin Question Bank Import section to get started.
+          </p>
           {session.isAdmin && (
-            <div className="pt-2">
-              <button
-                onClick={() => onNavigate('admin')}
-                className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
-              >
-                <span>Go to Admin Question Import</span>
-              </button>
-            </div>
+            <button className="qb-go" style={{ maxWidth: 280, margin: '16px auto 0' }} onClick={() => onNavigate('admin')}>
+              <span>Go to Admin Question Import</span>
+              <span className="a"><ChevronRight size={18} /></span>
+            </button>
           )}
         </div>
       )}
 
-      {/* Zero matching questions notification for active filter set */}
       {matchingQuestions.length === 0 && bankMeta.totalQuestions > 0 && (
-        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-3 animate-fade-in">
-          <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400" />
-          <div className="space-y-0.5">
-            <div className="font-bold text-slate-100">Zero Matching Questions</div>
-            <div className="text-slate-300">{getEmptyStateMessage()}</div>
+        <div className="qb-warn" style={{ marginTop: 18, display: 'flex', gap: 10 }}>
+          <AlertTriangle size={18} style={{ flex: 'none', color: 'var(--am)' }} />
+          <div>
+            <div style={{ fontWeight: 600, color: 'var(--ink)' }}>Zero Matching Questions</div>
+            <div>{getEmptyStateMessage()}</div>
           </div>
         </div>
       )}
 
-      {/* Subscription Checking Indicator */}
       {subscriptionLoading && (
-        <div className="glass-panel border-cyan-500/30 p-5 shadow-lg flex items-center justify-between gap-4 animate-pulse">
-          <div className="flex items-center gap-3">
-            <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-              <RefreshCw className="w-6 h-6 animate-spin text-[#00F2FF]" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                Checking Subscription Status...
-              </h3>
-              <p className="text-xs text-slate-400">
-                Verifying your MOH Residency Pass with the subscription database...
-              </p>
-            </div>
+        <div className="qb-card qb-pulse" style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <RefreshCw size={20} className="animate-spin" style={{ color: 'var(--cy)', flex: 'none' }} />
+          <div>
+            <div style={{ fontWeight: 600 }}>Checking Subscription Status...</div>
+            <div style={{ color: 'var(--dim)', fontSize: 12.5 }}>Verifying your MOH Residency Pass with the subscription database...</div>
           </div>
         </div>
       )}
 
-      {/* Subscription Lock Notice (Only if checking is finished and unsubscribed) */}
       {!subscriptionLoading && !isSubscribed && (
-        <div className="glass-panel border-amber-500/30 p-5 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              <Lock className="w-6 h-6" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                <span>
-                  {session.subscriptionStatus === 'EXPIRED'
-                    ? 'Subscription Expired — Renewal Required'
-                    : 'Active Subscription Required'}
-                </span>
-                <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase rounded border border-amber-500/40">
-                  {session.subscriptionStatus === 'EXPIRED' ? 'Expired' : 'Locked'}
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400 max-w-lg">
+        <div className="qb-card qb-amber" style={{ marginTop: 18, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
+          <div style={{ display: 'flex', gap: 12, minWidth: 0, flex: '1 1 260px' }}>
+            <Lock size={20} style={{ color: 'var(--am)', flex: 'none', marginTop: 2 }} />
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                {session.subscriptionStatus === 'EXPIRED' ? 'Subscription Expired — Renewal Required' : 'Active Subscription Required'}
+              </div>
+              <div style={{ color: 'var(--dim)', fontSize: 12.5, lineHeight: 1.5, marginTop: 3 }}>
                 {session.subscriptionStatus === 'EXPIRED'
                   ? 'Your MOH Residency Pass has expired. Please renew your subscription to resume creating and solving test blocks.'
                   : 'You can configure filter criteria, but an active MOH Residency Pass is required to start solving blocks.'}
-              </p>
+              </div>
             </div>
           </div>
-
-          <button
-            onClick={() => onNavigate('subscription')}
-            className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 shrink-0 cursor-pointer"
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>{session.subscriptionStatus === 'EXPIRED' ? 'Renew MOH Pass' : 'Get MOH Pass'}</span>
+          <button className="qb-tbtn" style={{ borderColor: 'rgba(232,182,106,.5)', color: 'var(--am)', minHeight: 44 }} onClick={() => onNavigate('subscription')}>
+            <CreditCard size={15} /> {session.subscriptionStatus === 'EXPIRED' ? 'Renew MOH Pass' : 'Get MOH Pass'}
           </button>
         </div>
       )}
 
       {errorMsg && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0" />
+        <div className="qb-err">
+          <AlertTriangle size={16} style={{ flex: 'none' }} />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {/* Filter Options Panel */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Columns: Filter Selectors */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Major Filter */}
-          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.05s' }}>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-[#00F2FF]" />
-                <span>Specialty Major (Multi-Select)</span>
-              </label>
-              <span className="text-xs text-slate-400 font-medium truncate max-w-[200px]">
-                {selectedMajorsLabel}
-              </span>
+      <div className="qb-grid">
+        <div style={{ minWidth: 0 }}>
+          {/* Status */}
+          <section className="qb-sec">
+            <div className="qb-sh"><h2>Status</h2><span className="qb-mono">Which questions</span></div>
+            <div className="qb-tiles">
+              {([
+                ['ALL', 'All', 't-all', statusCounts.allCount],
+                ['COMPLETE', 'Complete', 't-done', statusCounts.completeCount],
+                ['UNCOMPLETED', 'Uncompleted', 't-inc', statusCounts.uncompletedCount],
+                ['UNUSED', 'Unused', 't-new', statusCounts.unusedCount],
+              ] as [QuestionStatusFilter, string, string, number][]).map(([val, label, cls, n]) => (
+                <button key={val} className={`qb-tile ${cls}`} aria-pressed={selectedStatusFilter === val} onClick={() => setSelectedStatusFilter(val)}>
+                  <span className="qb-mono">{label}</span>
+                  <b><CountUp value={n} duration={700} /></b>
+                </button>
+              ))}
             </div>
+          </section>
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => handleToggleMajor('All')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 pf-lift ${
-                  selectedMajors.includes('All')
-                    ? 'neon-bg font-black'
-                    : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                }`}
-              >
-                {selectedMajors.includes('All') && <Check className="w-3.5 h-3.5" />}
-                <span>All Majors</span>
+          {/* Majors */}
+          <section className="qb-sec">
+            <div className="qb-sh"><h2>Majors</h2><span className="qb-mono qb-trunc">{selectedMajorsLabel}</span></div>
+            <div className="qb-chips">
+              <button className="qb-chip" aria-pressed={selectedMajors.includes('All')} onClick={() => handleToggleMajor('All')}>
+                <span>All majors</span>
               </button>
-
               {bankMeta.majors.map((m) => {
                 const isSelected = selectedMajors.includes(m.name) && !selectedMajors.includes('All');
-                const mCount = majorQuestionCounts[m.name] ?? 0;
                 return (
-                  <button
-                    key={m.name}
-                    onClick={() => handleToggleMajor(m.name)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer pf-lift ${
-                      isSelected
-                        ? 'neon-bg font-black'
-                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3.5 h-3.5" />}
+                  <button key={m.name} className="qb-chip" aria-pressed={isSelected} onClick={() => handleToggleMajor(m.name)}>
                     <span>{m.name}</span>
-                    <span className="text-[10px] opacity-80">({mCount})</span>
+                    <i>{majorQuestionCounts[m.name] ?? 0}</i>
                   </button>
                 );
               })}
             </div>
-          </div>
+          </section>
 
-          {/* Topic Filter: a single button that opens a searchable picker */}
-          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.1s' }}>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Filter className="w-4 h-4 text-purple-400" />
-                <span>Sub-Topic (Multi-Select)</span>
-              </label>
-              <span className="text-[11px] text-slate-500 tabular-nums">{availableTopics.length} topics</span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setTopicSheetOpen(true)}
-              className="pf-lift w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-white/[0.04] border border-white/[0.09] hover:border-purple-400/50 hover:bg-purple-500/[0.06] text-left cursor-pointer"
-            >
-              <span className="w-9 h-9 rounded-lg bg-purple-500/15 border border-purple-400/25 text-purple-300 flex items-center justify-center shrink-0">
-                <Search className="w-4 h-4" />
+          {/* Topics */}
+          <section className="qb-sec">
+            <div className="qb-sh"><h2>Topics</h2><span className="qb-mono">{availableTopics.length} topics</span></div>
+            <button type="button" className="qb-row" onClick={() => setTopicSheetOpen(true)}>
+              <span style={{ minWidth: 0 }}>
+                <b>{selectedTopics.includes('All') ? 'All topics' : `${selectedTopics.length} topic${selectedTopics.length === 1 ? '' : 's'} selected`}</b>
+                <span className="s">{selectedTopics.includes('All') ? 'Tap to search and pick specific topics' : selectedTopics.join(', ')}</span>
               </span>
-              <span className="flex-1 min-w-0">
-                <span className="block text-sm font-semibold text-slate-100">
-                  {selectedTopics.includes('All') ? 'All topics' : `${selectedTopics.length} topic${selectedTopics.length === 1 ? '' : 's'} selected`}
-                </span>
-                <span className="block text-[11px] text-slate-500 truncate">
-                  {selectedTopics.includes('All') ? 'Tap to search and pick specific topics' : selectedTopics.join(', ')}
-                </span>
-              </span>
-              <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+              <ChevronRight size={18} style={{ flex: 'none', color: 'var(--dim)' }} />
             </button>
-
             {!selectedTopics.includes('All') && (
-              <div className="flex flex-wrap gap-1.5">
+              <div className="qb-selt">
                 {selectedTopics.slice(0, 8).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => handleToggleTopic(t)}
-                    className="pf-pop inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/15 border border-purple-400/35 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/25 cursor-pointer"
-                  >
-                    <span className="max-w-[11rem] truncate">{t}</span><X className="w-3 h-3" />
+                  <button key={t} className="qb-chip" onClick={() => handleToggleTopic(t)}>
+                    <span className="qb-trunc" style={{ maxWidth: '12rem' }}>{t}</span><X size={12} />
                   </button>
                 ))}
-                {selectedTopics.length > 8 && <span className="text-[11px] text-slate-500 self-center">+{selectedTopics.length - 8} more</span>}
+                {selectedTopics.length > 8 && <span className="qb-mono" style={{ alignSelf: 'center' }}>+{selectedTopics.length - 8} more</span>}
               </div>
             )}
-          </div>
+          </section>
 
           <TopicPicker
             open={topicSheetOpen}
@@ -1031,207 +897,97 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
             onClear={() => setSelectedTopics(['All'])}
           />
 
-          {/* Exam Type (TAJNEED / MADANI) — separate from the years list */}
-          {bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0 && (
-          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.15s' }}>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Layers className="w-4 h-4 text-cyan-400" />
-                <span>Exam Type</span>
-              </label>
-              <span className="text-xs text-slate-400 font-medium">{selectedExamType || 'All Types'}</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {bankMeta.examTypesAvailable.map((t) => {
-                const active = selectedExamType === t;
-                return (
-                  <button
-                    key={t}
-                    onClick={() => { setSelectedExamType(active ? null : t); setSelectedYears([]); }}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 cursor-pointer ${
-                      active
-                        ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/20'
-                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                    }`}
-                  >
-                    {active && <Check className="w-3 h-3 text-slate-950" />}
-                    <span>{t}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          )}
-
-          {/* Exam Year Multi-Select — years that belong to the chosen type */}
-          {bankId !== 'usmle_bank' && (
-          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.2s' }}>
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-emerald-400" />
-                <span>Exam Years (Multi-Select)</span>
-              </label>
-              <span className="text-xs text-slate-400 font-medium">
-                {selectedYears.length === 0 ? 'All Years' : `${selectedYears.length} Selected`}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {(selectedExamType && bankMeta.yearsByType ? bankMeta.yearsByType[selectedExamType] || [] : bankMeta.yearsAvailable).map((yr) => {
-                const isSelected = selectedYears.includes(yr);
-                return (
-                  <button
-                    key={yr}
-                    onClick={() => toggleYear(yr)}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1 cursor-pointer ${
-                      isSelected
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black shadow-md shadow-emerald-500/20'
-                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3 h-3 text-slate-950" />}
-                    <span>{yr}</span>
-                  </button>
-                );
-              })}
-              {selectedExamType && bankMeta.yearsByType && (bankMeta.yearsByType[selectedExamType] || []).length === 0 && (
-                <span className="text-xs text-slate-500">No years yet under {selectedExamType}.</span>
+          {/* Exam */}
+          {((bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0) || bankId !== 'usmle_bank') && (
+            <section className="qb-sec">
+              <div className="qb-sh"><h2>Exam</h2><span className="qb-mono">{selectedExamType || 'All types'}</span></div>
+              {bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0 && (
+                <div className="qb-seg">
+                  {bankMeta.examTypesAvailable.map((t) => {
+                    const active = selectedExamType === t;
+                    return (
+                      <button key={t} aria-pressed={active} onClick={() => { setSelectedExamType(active ? null : t); setSelectedYears([]); }}>
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
-            </div>
-          </div>
+              {bankId !== 'usmle_bank' && (
+                <div className="qb-chips" style={{ marginTop: 14 }}>
+                  {(selectedExamType && bankMeta.yearsByType ? bankMeta.yearsByType[selectedExamType] || [] : bankMeta.yearsAvailable).map((yr) => (
+                    <button key={yr} className="qb-chip" aria-pressed={selectedYears.includes(yr)} onClick={() => toggleYear(yr)}>
+                      <span>{yr}</span>
+                    </button>
+                  ))}
+                  {selectedExamType && bankMeta.yearsByType && (bankMeta.yearsByType[selectedExamType] || []).length === 0 && (
+                    <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>No years yet under {selectedExamType}.</span>
+                  )}
+                </div>
+              )}
+            </section>
           )}
 
-          {/* Difficulty Filter */}
-          <div className="pf-rise glass-panel p-5 space-y-3" style={{ animationDelay: '.25s' }}>
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-amber-400" />
-              <span>Difficulty Level</span>
-            </label>
-
-            <div className="grid grid-cols-4 gap-2">
+          {/* Difficulty */}
+          <section className="qb-sec">
+            <div className="qb-sh"><h2>Difficulty</h2><span className="qb-mono">Level</span></div>
+            <div className="qb-seg">
               {['All', 'Easy', 'Medium', 'Hard'].map((diff) => (
-                <button
-                  key={diff}
-                  onClick={() => setSelectedDifficulty(diff)}
-                  className={`py-2 px-3 rounded-xl text-xs font-semibold border text-center transition-all cursor-pointer ${
-                    selectedDifficulty === diff
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 font-black shadow-md shadow-amber-500/20'
-                      : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                  }`}
-                >
-                  {diff}
-                </button>
+                <button key={diff} aria-pressed={selectedDifficulty === diff} onClick={() => setSelectedDifficulty(diff)}>{diff}</button>
               ))}
             </div>
-          </div>
+          </section>
         </div>
 
-        {/* Right Column: Block Summary & Action */}
-        <div className="space-y-6">
-          <div className="pf-rise glass-panel p-6 space-y-5 sticky top-20 shadow-xl" style={{ animationDelay: '.2s' }}>
-            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 pb-2 border-b border-white/10">
-              Block Configuration
-            </h3>
-
-            {/* Questions Matching Summary */}
-            <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-2">
-              <div className="text-[10px] uppercase font-bold text-slate-400">Matching Questions</div>
-              <div className="text-3xl font-black text-[#00F2FF] flex items-baseline gap-2">
-                <span><CountUp value={matchingQuestions.length} duration={600} /></span>
-                <span className="text-xs font-normal text-slate-400">Questions</span>
-              </div>
+        {/* Your block (sticky on desktop; phones get the bottom bar below) */}
+        <aside className="qb-aside">
+          <div className="qb-block">
+            <div className="qb-mono" style={{ color: 'var(--cy)' }}>Your block</div>
+            <div className="qb-ring">
+              <svg viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(207,239,248,.1)" strokeWidth="7" />
+                <circle cx="60" cy="60" r="52" fill="none" stroke="#4FD6EC" strokeWidth="7" strokeLinecap="round" strokeDasharray="326.7"
+                  strokeDashoffset={326.7 * (1 - (poolSize ? Math.min(1, matchingQuestions.length / poolSize) : 0))}
+                  style={{ filter: 'drop-shadow(0 0 6px rgba(79,214,236,.7))', transition: 'stroke-dashoffset .8s cubic-bezier(.16,1,.3,1)' }} />
+              </svg>
+              <div className="c"><div><b><CountUp value={matchingQuestions.length} duration={600} /></b><span className="qb-mono">of {poolSize.toLocaleString()}</span></div></div>
             </div>
-
-            {/* Question Count Selector */}
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-300">Block Length (Questions)</label>
-              <div className="grid grid-cols-4 gap-2">
-                {[5, 10, 15, 20].map((cnt) => (
-                  <button
-                    key={cnt}
-                    onClick={() => setQuestionCount(cnt)}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      questionCount === cnt
-                        ? 'neon-bg font-black'
-                        : 'glass-panel text-slate-300 border-white/10 hover:bg-white/5'
-                    }`}
-                  >
-                    {cnt} Qs
-                  </button>
-                ))}
-              </div>
+            <div className="qb-mono" style={{ marginTop: 14 }}>Block length</div>
+            <div className="qb-len">
+              {[5, 10, 15, 20].map((cnt) => (
+                <button key={cnt} aria-pressed={questionCount === cnt} onClick={() => setQuestionCount(cnt)}>{cnt}</button>
+              ))}
             </div>
-
-            {/* Filter Summary List */}
-            <div className="space-y-2 pt-2 text-xs text-slate-400 border-t border-white/10">
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Status:</span>
-                <span className="font-semibold text-slate-200 text-right uppercase tracking-wider">
-                  {selectedStatusFilter === 'ALL'
-                    ? 'All Questions'
-                    : selectedStatusFilter === 'COMPLETE'
-                    ? 'Complete Questions'
-                    : selectedStatusFilter === 'UNCOMPLETED'
-                    ? 'Uncompleted Questions'
-                    : 'Unused Questions'}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Major:</span>
-                <span className="font-semibold text-slate-200 truncate text-right">{selectedMajorsLabel}</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Topic:</span>
-                <span className="font-semibold text-slate-200 truncate text-right">{selectedTopicsLabel}</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Type:</span>
-                <span className="font-semibold text-slate-200 text-right">{selectedExamType || 'All'}</span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Years:</span>
-                <span className="font-semibold text-slate-200 truncate text-right">
-                  {selectedYears.length === 0 ? 'All' : selectedYears.join(', ')}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Difficulty:</span>
-                <span className="font-semibold text-slate-200 text-right">{selectedDifficulty}</span>
-              </div>
-            </div>
-
-            {/* Primary Action Button */}
-            <button
-              onClick={handleStartBlock}
-              disabled={matchingQuestions.length === 0 || subscriptionLoading}
-              className={`w-full py-3.5 px-4 rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-lg cursor-pointer ${
-                matchingQuestions.length === 0 || subscriptionLoading
-                  ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
-                  : !isSubscribed
-                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20'
-                  : 'neon-bg pf-shimmer'
-              }`}
-            >
-              {subscriptionLoading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin text-cyan-400" />
-                  <span>Checking Subscription...</span>
-                </>
-              ) : matchingQuestions.length === 0 ? (
-                <span>No Questions Available</span>
-              ) : !isSubscribed ? (
-                <>
-                  <Lock className="w-4 h-4" />
-                  <span>Subscribe to Start Block</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-4 h-4 fill-slate-950" />
-                  <span>Start Practice Block</span>
-                </>
-              )}
+            <ul className="qb-sum">
+              <li><span>Status</span><span>{selectedStatusFilter === 'ALL' ? 'All questions' : selectedStatusFilter === 'COMPLETE' ? 'Complete' : selectedStatusFilter === 'UNCOMPLETED' ? 'Uncompleted' : 'Unused'}</span></li>
+              <li><span>Majors</span><span>{selectedMajorsLabel}</span></li>
+              <li><span>Topics</span><span>{selectedTopicsLabel}</span></li>
+              <li><span>Exam</span><span>{selectedExamType || 'All types'}</span></li>
+              <li><span>Years</span><span>{selectedYears.length === 0 ? 'All years' : selectedYears.join(', ')}</span></li>
+              <li><span>Difficulty</span><span>{selectedDifficulty}</span></li>
+            </ul>
+            {matchingQuestions.length === 0 && bankMeta.totalQuestions > 0 && (
+              <div className="qb-warn">No questions match these filters. Remove a filter to continue.</div>
+            )}
+            <button className={`qb-go ${!isSubscribed && !subscriptionLoading ? 'sub-b' : ''}`} onClick={handleStartBlock} disabled={startDisabled}>
+              <span>{startLabel}</span>
+              <span className="a">{subscriptionLoading ? <RefreshCw size={18} className="animate-spin" /> : !isSubscribed ? <Lock size={17} /> : <Play size={17} />}</span>
             </button>
           </div>
+        </aside>
+      </div>
+
+      {/* Phone bottom bar */}
+      <div className="qb-bar">
+        <div className="in">
+          <div>
+            <div className="n"><CountUp value={matchingQuestions.length} duration={500} /></div>
+            <div className="qb-mono" style={{ fontSize: 9.5 }}>Questions match</div>
+          </div>
+          <button className={`qb-go ${!isSubscribed && !subscriptionLoading ? 'sub-b' : ''}`} onClick={handleStartBlock} disabled={startDisabled}>
+            <span>{subscriptionLoading ? 'Checking...' : matchingQuestions.length === 0 ? 'No questions' : !isSubscribed ? 'Subscribe' : 'Start block'}</span>
+            <span className="a">{!isSubscribed && !subscriptionLoading ? <Lock size={16} /> : <ChevronRight size={18} />}</span>
+          </button>
         </div>
       </div>
     </div>
