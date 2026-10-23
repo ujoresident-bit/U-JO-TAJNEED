@@ -16,7 +16,9 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
   const toggleRef = useRef(onToggle);
   selRef.current = selected;
   toggleRef.current = onToggle;
-  const key = majors.map((m) => m.name + ':' + m.count).join('|');
+  const majorsRef = useRef(majors);
+  majorsRef.current = majors;
+  const key = majors.map((m) => m.name).join('|');
 
   useEffect(() => {
     const cv = cvRef.current;
@@ -43,7 +45,7 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
     const hubs: any[] = [], subs: any[] = [], links: number[][] = [], ties: number[][] = [];
     for (let i = 0; i < NH; i++) {
       const y = 1 - ((i + 0.5) / NH) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), a = i * 2.399963 + rnd() * 0.25;
-      hubs.push({ n: majors[i].name, c: majors[i].count, x: Math.cos(a) * r, y: y * 0.92, z: Math.sin(a) * r, sx: (rnd() - 0.5) * 5, sy: (rnd() - 0.5) * 5, sz: (rnd() - 0.5) * 5 });
+      hubs.push({ n: majors[i].name, c: 0, x: Math.cos(a) * r, y: y * 0.92, z: Math.sin(a) * r, sx: (rnd() - 0.5) * 5, sy: (rnd() - 0.5) * 5, sz: (rnd() - 0.5) * 5 });
     }
     const perHub = Math.max(4, Math.round((lowPower ? 90 : 190) / NH));
     hubs.forEach((h, hi) => {
@@ -161,8 +163,7 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
         for (let i = 0; i <= 18; i++) { const p = P(arcPt(a, b, i / 18, 0.16), asm, sc); i ? cx.lineTo(p.x, p.y) : cx.moveTo(p.x, p.y); }
         cx.strokeStyle = on ? 'rgba(207,239,248,.85)' : half ? 'rgba(79,214,236,.5)' : 'rgba(207,239,248,' + (anySel ? 0.09 : 0.2) + ')';
         cx.lineWidth = on ? 1.8 : 1;
-        if (on) { cx.shadowColor = 'rgba(79,214,236,.9)'; cx.shadowBlur = 10; }
-        cx.stroke(); cx.shadowBlur = 0;
+                cx.stroke();
       });
       const selIdx: number[] = [];
       hubs.forEach((_, i) => { if (isSel(i)) selIdx.push(i); });
@@ -196,8 +197,7 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
         halo.addColorStop(0, 'rgba(79,214,236,' + (on ? 0.5 : 0.18 * (anySel ? 0.5 : 1)) + ')'); halo.addColorStop(1, 'rgba(79,214,236,0)');
         cx.fillStyle = halo; cx.beginPath(); cx.arc(p.x, p.y, r * (on ? 7 : 4), 0, 7); cx.fill();
         cx.fillStyle = on ? '#FFFFFF' : 'rgba(207,239,248,' + (0.45 + 0.5 * depth) * (anySel ? 0.7 : 1) + ')';
-        if (on) { cx.shadowColor = 'rgba(79,214,236,1)'; cx.shadowBlur = 16; }
-        cx.beginPath(); cx.arc(p.x, p.y, r, 0, 7); cx.fill(); cx.shadowBlur = 0;
+                cx.beginPath(); cx.arc(p.x, p.y, r, 0, 7); cx.fill();
         cx.strokeStyle = 'rgba(207,239,248,' + (on ? 0.9 : 0.35 * depth) + ')'; cx.lineWidth = 1;
         cx.beginPath(); cx.arc(p.x, p.y, r + 3.5, 0, 7); cx.stroke();
         if (on || i === hover) {
@@ -207,7 +207,7 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
           const lx = p.x + (rt ? r + 16 : -r - 16);
           cx.strokeStyle = 'rgba(207,239,248,.4)'; cx.beginPath(); cx.moveTo(p.x + (rt ? r + 4 : -r - 4), p.y); cx.lineTo(lx + (rt ? -4 : 4), p.y); cx.stroke();
           cx.fillStyle = '#EAF1F7'; cx.fillText(hubs[i].n, lx, p.y + 4);
-          cx.fillStyle = '#93A3B6'; cx.font = "500 9.5px 'Geist Mono',ui-monospace,monospace"; cx.fillText(String(hubs[i].c), lx, p.y + 17);
+          cx.fillStyle = '#93A3B6'; cx.font = "500 9.5px 'Geist Mono',ui-monospace,monospace"; cx.fillText(String(majorsRef.current[i]?.count ?? 0), lx, p.y + 17);
         }
       });
       shocks = shocks.filter((s) => T - s.t < 1.6);
@@ -215,10 +215,6 @@ const MajorsMap: React.FC<MajorsMapProps> = ({ majors, selected, onToggle }) => 
         const i = hubs.findIndex((h) => h.n === s.n); if (i < 0) return;
         const p = HP[i], k = (T - s.t) / 1.6;
         cx.strokeStyle = 'rgba(79,214,236,' + (1 - k) * 0.8 + ')'; cx.lineWidth = 1.6; cx.beginPath(); cx.arc(p.x, p.y, 8 + k * 70, 0, 7); cx.stroke();
-      });
-      cx.strokeStyle = 'rgba(207,239,248,.25)'; cx.lineWidth = 1;
-      [[6, 6, 1, 1], [W - 6, 6, -1, 1], [6, H - 6, 1, -1], [W - 6, H - 6, -1, -1]].forEach((c) => {
-        cx.beginPath(); cx.moveTo(c[0], c[1] + c[3] * 12); cx.lineTo(c[0], c[1]); cx.lineTo(c[0] + c[2] * 12, c[1]); cx.stroke();
       });
       cx.fillStyle = 'rgba(147,163,182,.8)'; cx.font = "500 9.5px 'Geist Mono',ui-monospace,monospace";
       cx.textAlign = 'left'; cx.fillText(NH + ' MAJORS  ·  ' + subs.length + ' TOPIC NODES', 14, H - 14);
