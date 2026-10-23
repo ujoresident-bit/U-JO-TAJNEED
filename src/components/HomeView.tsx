@@ -11,6 +11,7 @@ import {
 import { resolveSession } from '../services/authService';
 import { getSubscriptionStatus, syncSubscriptionFromSupabase } from '../services/subscriptionService';
 import { getUserStudyStats } from '../services/progressService';
+import { useBlocksSynced } from './useBlocksSynced';
 import { getBankPerformance } from '../services/performanceService';
 import { getActiveBlockForUser, getQuestionBankMeta, startBlock } from '../services/questionBankService';
 import { CountUp } from './PerfKit';
@@ -45,6 +46,7 @@ const readIntroScale = (): number => {
 const ARROW = <ArrowRight className="w-[18px] h-[18px]" aria-hidden="true" />;
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
+  useBlocksSynced();
   const [session, setSession] = useState(resolveSession());
   const user = session.user;
 
