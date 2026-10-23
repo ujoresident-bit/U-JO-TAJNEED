@@ -48,6 +48,18 @@ export default function App() {
     syncQuestionsWithSupabase().catch(() => {});
     syncBlocksFromSupabase().catch(() => {});
     syncFlashcardsFromSupabase().catch(() => {});
+
+    // Coming back to the app after using another device: pull the account's
+    // latest blocks again (at most every 20 seconds).
+    let lastPull = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastPull < 20000) return;
+      lastPull = Date.now();
+      syncBlocksFromSupabase().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   // Navigation history so every "Back" returns to the previous page.
