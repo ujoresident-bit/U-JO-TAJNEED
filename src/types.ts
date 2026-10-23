@@ -126,6 +126,7 @@ export interface HighlightRange {
 export interface BlockAnnotation {
   highlightData: HighlightRange[];
   struckOptions: OptionKey[];
+  flagged?: boolean; // student marked this question for review
 }
 
 export interface Block {
