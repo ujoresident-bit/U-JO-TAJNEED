@@ -11,6 +11,7 @@ import { FlashcardsView } from './components/FlashcardsView';
 import { ContentProtection } from './components/ContentProtection';
 import { CinematicIntro } from './components/CinematicIntro';
 import { SpecialtyHub } from './components/SpecialtyHub';
+import { SyncCheck } from './components/SyncCheck';
 import { MostCommonView } from './components/MostCommonView';
 import { VideosView } from './components/VideosView';
 import { QBankBasicView } from './components/QBankBasicView';
@@ -210,6 +211,7 @@ export default function App() {
 
           {currentView === 'flashcards' && <FlashcardsView onNavigate={handleNavigate} />}
 
+          {currentView === 'sync_check' && <SyncCheck onNavigate={handleNavigate} />}
           {currentView === 'admin' && (
             <AdminDashboard onNavigate={handleNavigate} onRefreshData={handleRefreshData} />
           )}
