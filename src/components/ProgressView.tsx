@@ -6,6 +6,7 @@ import { getSubscriptionStatus } from '../services/subscriptionService';
 import { getBankPerformance } from '../services/performanceService';
 import { startBlock } from '../services/questionBankService';
 import { fetchDueReviews } from '../services/reviewService';
+import { useBlocksSynced } from './useBlocksSynced';
 
 interface ProgressViewProps {
   onNavigate: (view: string, params?: any) => void;
@@ -22,6 +23,7 @@ const tone = (pct: number) =>
   : { bar: 'bg-rose-400', text: 'text-rose-300' };
 
 export const ProgressView: React.FC<ProgressViewProps> = ({ onNavigate }) => {
+  const syncTick = useBlocksSynced();
   const session = resolveSession();
   const user = session.user;
 
@@ -35,7 +37,7 @@ export const ProgressView: React.FC<ProgressViewProps> = ({ onNavigate }) => {
   const [dueCount, setDueCount] = useState(0);
   const [startingWeak, setStartingWeak] = useState(false);
 
-  const perf = useMemo(() => getBankPerformance(user.telegramId, bankId), [user.telegramId, bankId]);
+  const perf = useMemo(() => getBankPerformance(user.telegramId, bankId), [user.telegramId, bankId, syncTick]);
 
   useEffect(() => {
     fetchDueReviews(bankId).then((r) => setDueCount(r.due.length)).catch(() => setDueCount(0));
