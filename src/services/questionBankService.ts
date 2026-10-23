@@ -49,6 +49,23 @@ export const getStoredQuestions = (): Question[] => {
   return DEMO_QUESTIONS as Question[];
 };
 
+// Read-only parsed copy, reused while the stored text is unchanged. The filter screens call
+// getFilteredQuestions dozens of times per tap; re-parsing the whole bank each time made them slow.
+let roRaw: string | null = null;
+let roParsed: Question[] | null = null;
+const getStoredQuestionsReadOnly = (): Question[] => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(QUESTIONS_STORAGE_KEY);
+      if (raw && raw === roRaw && roParsed) return roParsed;
+      const fresh = getStoredQuestions();
+      if (raw) { roRaw = raw; roParsed = fresh; }
+      return fresh;
+    }
+  } catch {}
+  return getStoredQuestions();
+};
+
 export const saveStoredQuestions = (questions: Question[]): void => {
   const serialized = JSON.stringify(questions);
   if (typeof localStorage !== 'undefined') {
@@ -290,7 +307,22 @@ export const getQuestionBankMeta = (bankId: string = BANK_ID): QuestionBankMeta 
   };
 };
 
+let statusCacheKey = '';
+let statusCacheVal: { answeredQuestionIds: Set<string>; encounteredQuestionIds: Set<string> } | null = null;
 export const getUserQuestionStatusSets = (userId?: string): { answeredQuestionIds: Set<string>; encounteredQuestionIds: Set<string> } => {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const rawBlocks = localStorage.getItem(BLOCKS_STORAGE_KEY) || '';
+      const key = (userId || '') + '|' + rawBlocks;
+      if (statusCacheVal && key === statusCacheKey && rawBlocks.length > 0) return statusCacheVal;
+      const fresh = computeUserQuestionStatusSets(userId);
+      statusCacheKey = key; statusCacheVal = fresh;
+      return fresh;
+    }
+  } catch {}
+  return computeUserQuestionStatusSets(userId);
+};
+const computeUserQuestionStatusSets = (userId?: string): { answeredQuestionIds: Set<string>; encounteredQuestionIds: Set<string> } => {
   let targetUserId = userId;
   if (!targetUserId) {
     try {
@@ -328,7 +360,7 @@ export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
   // block (the real set of questions a student answers) was built from the
   // entire combined pool regardless of which bank the student opened,
   // silently mixing U JO MOH and U JO MAJORS QBANK questions together.
-  const allQuestions = getStoredQuestions().filter(
+  const allQuestions = getStoredQuestionsReadOnly().filter(
     (q) => !filters.bankId || q.bankId === filters.bankId
   ).filter(
     // QBANK BASIC is a separate, Major-only content pool reached via its
