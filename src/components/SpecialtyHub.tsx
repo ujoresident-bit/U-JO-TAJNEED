@@ -6,6 +6,7 @@ import { getUserStudyStats } from '../services/progressService';
 import { getBankPerformance } from '../services/performanceService';
 import { getActiveBlockForUser, getQuestionBankMeta } from '../services/questionBankService';
 import { CountUp } from './PerfKit';
+import { useBlocksSynced } from './useBlocksSynced';
 import { NeuralMap, NeuralNode } from './NeuralMap';
 
 interface SpecialtyHubProps {
@@ -79,6 +80,7 @@ const INTRO_SCALE = 0.6;
 // page: a free-floating network of the student's real subjects, soft cards
 // with glowing pictogram orbs, staggered reveal.
 export const SpecialtyHub: React.FC<SpecialtyHubProps> = ({ bankId, bankLabel, onNavigate }) => {
+  useBlocksSynced();
   const [dueCount, setDueCount] = useState<number | null>(null);
   useEffect(() => {
     fetchDueReviews(bankId).then((r) => setDueCount(r.due.length)).catch(() => {});
