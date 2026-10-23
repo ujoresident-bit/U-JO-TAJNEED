@@ -1310,9 +1310,23 @@ const CLIENT_SESSION_ID: string =
     ? crypto.randomUUID()
     : `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-export const syncBlockToSupabase = async (block: Block): Promise<void> => {
+// Remembers which version (updatedAt) of each block the account already has,
+// so blocks created before syncing worked, or while offline, get uploaded once.
+const PUSHED_KEY = 'ujo_blocks_pushed_v1';
+const getPushed = (): Record<string, string> => {
+  try { return JSON.parse(localStorage.getItem(PUSHED_KEY) || '{}') || {}; } catch { return {}; }
+};
+const markPushed = (id: string, updatedAt: string) => {
   try {
-    if (typeof window === 'undefined') return;
+    const m = getPushed();
+    m[id] = updatedAt;
+    localStorage.setItem(PUSHED_KEY, JSON.stringify(m));
+  } catch { /* ignore */ }
+};
+
+export const syncBlockToSupabase = async (block: Block, silent = false): Promise<'ok' | 'conflict' | 'failed'> => {
+  try {
+    if (typeof window === 'undefined') return 'failed';
     const user = getCurrentUser();
     const response = await fetch('/api/blocks', {
       method: 'POST',
@@ -1327,13 +1341,38 @@ export const syncBlockToSupabase = async (block: Block): Promise<void> => {
 
     if (response.status === 409) {
       const data = await response.json().catch(() => ({}));
-      if (data.code === 'SESSION_CONFLICT') {
+      if (data.code === 'SESSION_CONFLICT' && !silent) {
         await alertAction(data.error || 'يبدو أنك تستخدم حسابك من جهاز أو نافذة أخرى حالياً.');
       }
+      return 'conflict';
     }
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.synced === true) {
+      markPushed(block.id, block.updatedAt);
+      return 'ok';
+    }
+    console.warn('Block sync was not accepted by the server:', response.status, data?.error || data?.note || '');
   } catch (err) {
     console.warn("Background sync of block to Supabase failed, falling back to local storage:", err);
   }
+  return 'failed';
+};
+
+// Uploads this user's local blocks the account does not have yet (newest first).
+export const pushUnsyncedBlocks = async (): Promise<void> => {
+  try {
+    if (typeof window === 'undefined') return;
+    const user = getCurrentUser();
+    const pushed = getPushed();
+    const pending = getAllStoredBlocks()
+      .filter((b) => b.userId === user.telegramId && pushed[b.id] !== b.updatedAt)
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .slice(0, 60);
+    for (const block of pending) {
+      const r = await syncBlockToSupabase(block, true);
+      if (r === 'conflict') break;
+    }
+  } catch { /* never interrupt the app */ }
 };
 
 export const syncBlocksFromSupabase = async (status?: string, bankId?: string): Promise<Block[]> => {
@@ -1360,6 +1399,7 @@ export const syncBlocksFromSupabase = async (status?: string, bankId?: string): 
         const local = localBlocksMap[remoteBlock.id];
         if (!local || new Date(remoteBlock.updatedAt) >= new Date(local.updatedAt)) {
           localBlocksMap[remoteBlock.id] = remoteBlock;
+          markPushed(remoteBlock.id, remoteBlock.updatedAt);
         }
       });
       saveStoredBlocks(localBlocksMap);
