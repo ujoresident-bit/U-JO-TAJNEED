@@ -1,5 +1,5 @@
 import { useBlocksSynced } from './useBlocksSynced';
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import {
   Filter,
   BookOpen,
@@ -67,7 +67,7 @@ const QB_CSS = `
 .qb-h1{margin:8px 0 0;font:400 clamp(42px,11vw,72px)/.96 var(--serif);letter-spacing:-.015em;color:var(--ink)}
 .qb-h1 em{color:var(--ice)}
 .qb-sub{margin:10px 0 0;color:var(--dim);font-size:14px;line-height:1.5;max-width:38ch}
-.qb-net{position:relative;height:300px;margin:6px -4px 0}
+.qb-net{position:relative;height:300px;margin:6px -4px 0;-webkit-mask-image:radial-gradient(ellipse 74% 74% at 50% 50%,#000 60%,transparent 100%);mask-image:radial-gradient(ellipse 74% 74% at 50% 50%,#000 60%,transparent 100%)}
 .qb-net canvas{width:100%;height:100%;display:block;cursor:grab}
 .qb-nethint{margin:0;text-align:center}
 @media(min-width:860px){.qb-hero{grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:24px}.qb-net{height:430px;margin:0}}
@@ -471,17 +471,26 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
     }
   };
 
+  // Heavy count/filter work runs on deferred copies so taps on chips and the map respond instantly.
+  const dMajors = useDeferredValue(selectedMajors);
+  const dTopics = useDeferredValue(selectedTopics);
+  const dYears = useDeferredValue(selectedYears);
+  const dExamType = useDeferredValue(selectedExamType);
+  const dDifficulty = useDeferredValue(selectedDifficulty);
+  const dStatus = useDeferredValue(selectedStatusFilter);
+  const dCount = useDeferredValue(questionCount);
+
   // Non-status filter object for calculating status card totals
   const nonStatusFilters: BlockFilters = useMemo(
     () => ({
-      majors: selectedMajors.includes('All') ? undefined : selectedMajors,
-      topics: selectedTopics.includes('All') ? undefined : selectedTopics,
-      years: selectedYears.length > 0 ? selectedYears : undefined,
-      examType: selectedExamType || undefined,
-      difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
+      majors: dMajors.includes('All') ? undefined : dMajors,
+      topics: dTopics.includes('All') ? undefined : dTopics,
+      years: dYears.length > 0 ? dYears : undefined,
+      examType: dExamType || undefined,
+      difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
       bankId,
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, bankId]
+    [dMajors, dTopics, dYears, dExamType, dDifficulty, bankId]
   );
 
   // Questions matching non-status criteria (used for card totals)
@@ -497,19 +506,19 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   // Construct current full filter object including statusFilter
   const currentFilters: BlockFilters = useMemo(
     () => ({
-      major: selectedMajors.length === 1 && selectedMajors[0] !== 'All' ? selectedMajors[0] : undefined,
-      majors: selectedMajors.includes('All') ? undefined : selectedMajors,
-      topic: selectedTopics.length === 1 && selectedTopics[0] !== 'All' ? selectedTopics[0] : undefined,
-      topics: selectedTopics.includes('All') ? undefined : selectedTopics,
-      years: selectedYears.length > 0 ? selectedYears : undefined,
-      examType: selectedExamType || undefined,
-      difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
-      questionCount,
-      statusFilter: selectedStatusFilter,
+      major: dMajors.length === 1 && dMajors[0] !== 'All' ? dMajors[0] : undefined,
+      majors: dMajors.includes('All') ? undefined : dMajors,
+      topic: dTopics.length === 1 && dTopics[0] !== 'All' ? dTopics[0] : undefined,
+      topics: dTopics.includes('All') ? undefined : dTopics,
+      years: dYears.length > 0 ? dYears : undefined,
+      examType: dExamType || undefined,
+      difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
+      dCount,
+      statusFilter: dStatus,
       userId: user.telegramId,
       bankId
     }),
-    [selectedMajors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, questionCount, selectedStatusFilter, user.telegramId, bankId]
+    [dMajors, dTopics, dYears, dExamType, dDifficulty, dCount, dStatus, user.telegramId, bankId]
   );
 
   // Active question pool matching ALL filters (including status filter)
@@ -523,37 +532,38 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
     bankMeta.majors.forEach((m) => {
       const count = getFilteredQuestions({
         majors: [m.name],
-        topics: selectedTopics.includes('All') ? undefined : selectedTopics,
-        years: selectedYears.length > 0 ? selectedYears : undefined,
-        examType: selectedExamType || undefined,
-        difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
-        statusFilter: selectedStatusFilter,
+        topics: dTopics.includes('All') ? undefined : dTopics,
+        years: dYears.length > 0 ? dYears : undefined,
+        examType: dExamType || undefined,
+        difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
+        statusFilter: dStatus,
         userId: user.telegramId,
         bankId
       }).length;
       counts[m.name] = count;
     });
     return counts;
-  }, [bankMeta.majors, selectedTopics, selectedYears, selectedExamType, selectedDifficulty, selectedStatusFilter, user.telegramId, bankId]);
+  }, [bankMeta.majors, dTopics, dYears, dExamType, dDifficulty, dStatus, user.telegramId, bankId]);
 
   // Compute dynamic Topic Question Counts respecting active Status, Major, Year, Difficulty filters
   const topicQuestionCounts = useMemo(() => {
     const counts: Record<string, number> = {};
+    if (!topicSheetOpen) return counts;
     availableTopics.forEach((tName) => {
       const count = getFilteredQuestions({
-        majors: selectedMajors.includes('All') ? undefined : selectedMajors,
+        majors: dMajors.includes('All') ? undefined : dMajors,
         topics: [tName],
-        years: selectedYears.length > 0 ? selectedYears : undefined,
-        examType: selectedExamType || undefined,
-        difficulty: selectedDifficulty !== 'All' ? selectedDifficulty : undefined,
-        statusFilter: selectedStatusFilter,
+        years: dYears.length > 0 ? dYears : undefined,
+        examType: dExamType || undefined,
+        difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
+        statusFilter: dStatus,
         userId: user.telegramId,
         bankId
       }).length;
       counts[tName] = count;
     });
     return counts;
-  }, [availableTopics, selectedMajors, selectedYears, selectedExamType, selectedDifficulty, selectedStatusFilter, user.telegramId]);
+  }, [topicSheetOpen, availableTopics, dMajors, dYears, dExamType, dDifficulty, dStatus, user.telegramId]);
 
   const toggleYear = (year: number | string) => {
     if (selectedYears.includes(year)) {
@@ -675,6 +685,10 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
     return `No questions match the selected filter criteria.`;
   };
 
+  const mapMajors = useMemo(
+    () => bankMeta.majors.map((m) => ({ name: m.name, count: majorQuestionCounts[m.name] ?? 0 })),
+    [bankMeta.majors, majorQuestionCounts]
+  );
   const poolSize = nonStatusMatchingQuestions.length;
   const startDisabled = matchingQuestions.length === 0 || subscriptionLoading;
   const startLabel = subscriptionLoading ? "Checking subscription..." : matchingQuestions.length === 0 ? "No questions available" : !isSubscribed ? "Subscribe to start" : "Start practice block";
@@ -753,7 +767,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         <div>
           {bankMeta.majors.length > 0 ? (
             <MajorsMap
-              majors={bankMeta.majors.map((m) => ({ name: m.name, count: majorQuestionCounts[m.name] ?? 0 }))}
+              majors={mapMajors}
               selected={selectedMajors.includes('All') ? [] : selectedMajors}
               onToggle={handleToggleMajor}
             />
