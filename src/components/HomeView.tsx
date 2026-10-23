@@ -264,6 +264,8 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       : { key: 'done', label: 'Completed blocks', hint: 'Review finished question sets', icon: CheckCircle2, onClick: () => onNavigate('progress') }
   ];
 
+  if (session.isAdmin) quickLinks.push({ key: 'sync', label: 'Sync check', hint: 'Compare this device with your account', icon: CheckCircle2, onClick: () => onNavigate('sync_check') });
+
   const rise = (delay: number) => ({ ['--d' as any]: `${delay * introScale}s` });
 
   return (
