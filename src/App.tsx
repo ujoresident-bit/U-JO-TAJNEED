@@ -18,7 +18,7 @@ import { ReviewView } from './components/ReviewView';
 import { SmartFirstAidView } from './components/SmartFirstAidView';
 import { initTelegramSdk } from './services/telegram';
 import { getCurrentUser, checkAccountActiveStatus } from './services/authService';
-import { syncQuestionsWithSupabase, syncBlocksFromSupabase } from './services/questionBankService';
+import { syncQuestionsWithSupabase, syncBlocksFromSupabase, pushUnsyncedBlocks } from './services/questionBankService';
 import { syncFlashcardsFromSupabase } from './services/flashcardService';
 import { syncSubscriptionFromSupabase } from './services/subscriptionService';
 
@@ -46,7 +46,7 @@ export default function App() {
       setRefreshKey((prev) => prev + 1);
     }).catch(() => {});
     syncQuestionsWithSupabase().catch(() => {});
-    syncBlocksFromSupabase().catch(() => {});
+    syncBlocksFromSupabase().then(() => pushUnsyncedBlocks()).catch(() => {});
     syncFlashcardsFromSupabase().catch(() => {});
 
     // Coming back to the app after using another device: pull the account's
@@ -56,7 +56,7 @@ export default function App() {
       if (document.visibilityState !== 'visible') return;
       if (Date.now() - lastPull < 20000) return;
       lastPull = Date.now();
-      syncBlocksFromSupabase().catch(() => {});
+      syncBlocksFromSupabase().then(() => pushUnsyncedBlocks()).catch(() => {});
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
