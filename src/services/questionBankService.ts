@@ -1615,6 +1615,7 @@ export const saveAnnotation = (
   if (!block) throw new Error('Block not found');
 
   block.annotations[questionId] = {
+    ...(block.annotations[questionId] || {}),
     highlightData,
     struckOptions
   };
@@ -1626,6 +1627,21 @@ export const saveAnnotation = (
   // Trigger background sync to Supabase
   syncBlockToSupabase(block).catch(() => {});
 
+  return block;
+};
+
+export const setQuestionFlag = (blockId: string, questionId: string, flagged: boolean): Block => {
+  const blocks = getStoredBlocks();
+  const block = blocks[blockId];
+  if (!block) throw new Error('Block not found');
+
+  const prev = block.annotations[questionId] || { highlightData: [], struckOptions: [] };
+  block.annotations[questionId] = { ...prev, flagged };
+  block.updatedAt = new Date().toISOString();
+
+  blocks[blockId] = block;
+  saveStoredBlocks(blocks);
+  syncBlockToSupabase(block).catch(() => {});
   return block;
 };
 
