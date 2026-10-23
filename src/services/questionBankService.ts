@@ -1363,6 +1363,7 @@ export const syncBlocksFromSupabase = async (status?: string, bankId?: string): 
         }
       });
       saveStoredBlocks(localBlocksMap);
+      try { window.dispatchEvent(new Event('ujo:blocks-synced')); } catch { /* ignore */ }
       return Object.values(localBlocksMap);
     }
   } catch (err) {
