@@ -14,7 +14,7 @@ import { DEMO_QUESTIONS, MOH_BANK_META, USMLE_BANK_META, DEMO_QUESTION_STATS } f
 import { getSubscriptionStatus, syncSubscriptionFromSupabase } from './subscriptionService';
 import { verifyTelegramAdminAuthorization, getCanonicalTelegramUser, getCurrentUser } from './authService';
 import { syncQuestionProgressToSupabase } from './progressService';
-import { alertAction } from './telegram';
+import { CLIENT_SESSION_ID, SESSION_REPLACED_EVENT } from './sessionService';
 
 const BANK_ID = 'human_medicine';
 const BLOCKS_STORAGE_KEY = 'ujo_blocks_v1';
@@ -1300,16 +1300,6 @@ export const getQuestionStats = (questionId: string): QuestionStats => {
   );
 };
 
-// Single-active-session enforcement: one random ID generated once per page
-// load (i.e. once per real session — a fresh app open/reload always starts
-// a new one). Sent with block-creation requests so the server can detect and
-// reject a second concurrent session for the same account. See
-// checkAndRegisterSession() in server.ts for the enforcement logic.
-const CLIENT_SESSION_ID: string =
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `sess_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
 // Remembers which version (updatedAt) of each block the account already has,
 // so blocks created before syncing worked, or while offline, get uploaded once.
 const PUSHED_KEY = 'ujo_blocks_pushed_v1';
@@ -1324,7 +1314,7 @@ const markPushed = (id: string, updatedAt: string) => {
   } catch { /* ignore */ }
 };
 
-export const syncBlockToSupabase = async (block: Block, silent = false): Promise<'ok' | 'conflict' | 'failed'> => {
+export const syncBlockToSupabase = async (block: Block, _silent = false): Promise<'ok' | 'conflict' | 'failed'> => {
   try {
     if (typeof window === 'undefined') return 'failed';
     const user = getCurrentUser();
@@ -1340,10 +1330,8 @@ export const syncBlockToSupabase = async (block: Block, silent = false): Promise
     });
 
     if (response.status === 409) {
-      const data = await response.json().catch(() => ({}));
-      if (data.code === 'SESSION_CONFLICT' && !silent) {
-        await alertAction(data.error || 'يبدو أنك تستخدم حسابك من جهاز أو نافذة أخرى حالياً.');
-      }
+      // Another device took over this account: tell the app to lock this screen.
+      try { window.dispatchEvent(new Event(SESSION_REPLACED_EVENT)); } catch { /* ignore */ }
       return 'conflict';
     }
     const data = await response.json().catch(() => null);
@@ -1375,13 +1363,27 @@ export const pushUnsyncedBlocks = async (): Promise<void> => {
   } catch { /* never interrupt the app */ }
 };
 
-export const syncBlocksFromSupabase = async (status?: string, bankId?: string): Promise<Block[]> => {
+// Which copy of a block is further along. Progress only moves forward, so the
+// copy with more answers wins; a finished block beats an unfinished one; on a
+// tie the newer one wins. (Comparing timestamps alone breaks when two devices'
+// clocks differ.)
+const blockProgressRank = (b: Block): number =>
+  (b.status === 'COMPLETED' ? 1_000_000 : 0) + Object.keys(b.answers || {}).length * 10 + (b.currentIndex || 0);
+
+const pullTsKey = (uid: string) => `ujo_blocks_pull_ts_v1_${uid}`;
+
+// full = true: read every block of the account (app open, "use this device").
+// full = false: only blocks changed since the last pull (cheap, for quick refreshes).
+export const syncBlocksFromSupabase = async (status?: string, bankId?: string, full: boolean = true): Promise<Block[]> => {
   try {
     if (typeof window === 'undefined') return getAllStoredBlocks();
     const user = getCurrentUser();
     const queryParams = new URLSearchParams();
     if (status) queryParams.append('status', status);
     if (bankId) queryParams.append('bankId', bankId);
+    let since = '';
+    if (!full) { try { since = localStorage.getItem(pullTsKey(user.telegramId)) || ''; } catch { since = ''; } }
+    if (since) queryParams.append('since', since);
 
     const res = await fetch(`/api/blocks?${queryParams.toString()}`, {
       headers: {
@@ -1395,15 +1397,23 @@ export const syncBlocksFromSupabase = async (status?: string, bankId?: string): 
     const data = await res.json();
     if (data && Array.isArray(data.blocks)) {
       const localBlocksMap = getStoredBlocks();
+      let changed = false;
       data.blocks.forEach((remoteBlock: Block) => {
         const local = localBlocksMap[remoteBlock.id];
-        if (!local || new Date(remoteBlock.updatedAt) >= new Date(local.updatedAt)) {
+        let useRemote = !local;
+        if (local) {
+          const rl = blockProgressRank(local), rr = blockProgressRank(remoteBlock);
+          useRemote = rr !== rl ? rr > rl : new Date(remoteBlock.updatedAt) >= new Date(local.updatedAt);
+        }
+        if (useRemote) {
           localBlocksMap[remoteBlock.id] = remoteBlock;
           markPushed(remoteBlock.id, remoteBlock.updatedAt);
+          changed = true;
         }
       });
       saveStoredBlocks(localBlocksMap);
-      try { window.dispatchEvent(new Event('ujo:blocks-synced')); } catch { /* ignore */ }
+      if (data.serverTime) { try { localStorage.setItem(pullTsKey(user.telegramId), String(data.serverTime)); } catch { /* ignore */ } }
+      if (changed || full) { try { window.dispatchEvent(new Event('ujo:blocks-synced')); } catch { /* ignore */ } }
       return Object.values(localBlocksMap);
     }
   } catch (err) {
