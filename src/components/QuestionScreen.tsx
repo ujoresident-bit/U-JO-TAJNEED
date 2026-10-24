@@ -348,6 +348,7 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
 
 
   const pct = ((currentIndex + 1) / questions.length) * 100;
+  const showPct = (stats?.totalAttempts || 0) > 0;
   const optKeys = ['A', 'B', 'C', 'D'] as OptionKey[];
   const diffCls = currentQuestion.difficulty === 'Hard' ? '#FF8FA3' : currentQuestion.difficulty === 'Medium' ? '#E8B66A' : '#6FE0B4';
 
@@ -443,6 +444,7 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
                 >
                   <span className="ex-badge">{optionKey}</span>
                   <span className="ex-ot">{currentQuestion.options[optionKey]}</span>
+                  {isAnswered && showPct && <i className="ex-pbar" style={{ width: `${stats.distribution[optionKey] || 0}%` }} />}
                   {!isAnswered && (
                     <button
                       onClick={(e) => toggleStrikeOption(e, optionKey)}
@@ -453,12 +455,19 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
                       <Strikethrough className="w-4 h-4" />
                     </button>
                   )}
+                  {isAnswered && showPct && (
+                    <span className="ex-pct" aria-label={`${stats.distribution[optionKey] || 0} percent chose ${optionKey}`}>{stats.distribution[optionKey] || 0}%</span>
+                  )}
                   {isAnswered && isCorrect && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
                   {isAnswered && isSelected && !isCorrect && <XCircle className="w-5 h-5 text-rose-400 shrink-0" />}
                 </div>
               );
             })}
           </div>
+
+          {isAnswered && showPct && (
+            <div className="ex-mono ex-ex">{stats.totalAttempts.toLocaleString()} examinees</div>
+          )}
 
           {isAnswered && (
             <div className="mt-6">
@@ -582,6 +591,13 @@ const EX_CSS = `
 .ex-opt.struck{opacity:.45}.ex-opt.struck .ex-ot{text-decoration:line-through}
 .ex-opt.right{cursor:default;border-color:rgba(111,224,180,.5);background:rgba(111,224,180,.08)}.ex-opt.right .ex-badge{background:var(--gr);border-color:var(--gr);color:#03131B}
 .ex-opt.wrong{cursor:default;border-color:rgba(255,143,163,.5);background:rgba(255,143,163,.08)}.ex-opt.wrong .ex-badge{background:var(--rose);border-color:var(--rose);color:#1d070c}
+.ex-pct{flex:none;font:500 13px var(--mono);color:var(--dim);font-variant-numeric:tabular-nums;animation:exfade .5s both}
+.ex-opt.right .ex-pct{color:#8FEAC6}.ex-opt.wrong .ex-pct{color:#FFA9B8}
+.ex-pbar{position:absolute;left:14px;bottom:7px;height:3px;border-radius:3px;max-width:calc(100% - 28px);background:rgba(207,239,248,.22);animation:exgrow .7s cubic-bezier(.16,1,.3,1) both;transform-origin:left}
+.ex-opt.right .ex-pbar{background:var(--gr)}.ex-opt.wrong .ex-pbar{background:var(--rose)}
+.ex-ex{margin-top:12px;color:var(--dim);text-align:right}
+@keyframes exfade{from{opacity:0}}@keyframes exgrow{from{transform:scaleX(0)}}
+@media(prefers-reduced-motion:reduce){.ex-pct,.ex-pbar{animation:none}}
 .ex-opt.dim{cursor:default;opacity:.55}
 .ex-nav{position:sticky;bottom:0;z-index:20;margin-top:18px;padding:22px 0 calc(10px + env(safe-area-inset-bottom,0px));background:linear-gradient(180deg,rgba(2,6,23,0),rgba(2,6,23,.94) 45%)}
 .ex-nav .in{display:flex;align-items:center;gap:10px;padding:8px;border-radius:22px;border:1px solid rgba(207,239,248,.13);background:#0c141a;box-shadow:0 20px 60px -24px rgba(79,214,236,.4)}
