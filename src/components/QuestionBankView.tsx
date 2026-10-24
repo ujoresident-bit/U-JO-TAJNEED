@@ -373,7 +373,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   const [selectedMajors, setSelectedMajors] = useState<string[]>(['All']);
   const [selectedTopics, setSelectedTopics] = useState<string[]>(['All']);
   const [selectedYears, setSelectedYears] = useState<(number | string)[]>([]);
-  const [selectedExamType, setSelectedExamType] = useState<string | null>(null);
+  const [selectedExamTypes, setSelectedExamTypes] = useState<string[]>([]); // empty = all types
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [questionCount, setQuestionCount] = useState<number>(10);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -475,10 +475,18 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
   const dMajors = useDeferredValue(selectedMajors);
   const dTopics = useDeferredValue(selectedTopics);
   const dYears = useDeferredValue(selectedYears);
-  const dExamType = useDeferredValue(selectedExamType);
+  const dExamType = useDeferredValue(selectedExamTypes);
   const dDifficulty = useDeferredValue(selectedDifficulty);
   const dStatus = useDeferredValue(selectedStatusFilter);
   const dCount = useDeferredValue(questionCount);
+
+  // Years offered: all years, or only those under the selected exam types (union).
+  const yearOptions = useMemo(() => {
+    if (selectedExamTypes.length === 0 || !bankMeta.yearsByType) return bankMeta.yearsAvailable;
+    const set = new Set<number | string>();
+    selectedExamTypes.forEach((t) => (bankMeta.yearsByType![t] || []).forEach((y) => set.add(y)));
+    return bankMeta.yearsAvailable.filter((y) => set.has(y));
+  }, [selectedExamTypes, bankMeta.yearsByType, bankMeta.yearsAvailable]);
 
   // Non-status filter object for calculating status card totals
   const nonStatusFilters: BlockFilters = useMemo(
@@ -486,7 +494,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       majors: dMajors.includes('All') ? undefined : dMajors,
       topics: dTopics.includes('All') ? undefined : dTopics,
       years: dYears.length > 0 ? dYears : undefined,
-      examType: dExamType || undefined,
+      examTypes: dExamType.length > 0 ? dExamType : undefined,
       difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
       bankId,
     }),
@@ -511,7 +519,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
       topic: dTopics.length === 1 && dTopics[0] !== 'All' ? dTopics[0] : undefined,
       topics: dTopics.includes('All') ? undefined : dTopics,
       years: dYears.length > 0 ? dYears : undefined,
-      examType: dExamType || undefined,
+      examTypes: dExamType.length > 0 ? dExamType : undefined,
       difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
       dCount,
       statusFilter: dStatus,
@@ -534,7 +542,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         majors: [m.name],
         topics: dTopics.includes('All') ? undefined : dTopics,
         years: dYears.length > 0 ? dYears : undefined,
-        examType: dExamType || undefined,
+        examTypes: dExamType.length > 0 ? dExamType : undefined,
         difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
         statusFilter: dStatus,
         userId: user.telegramId,
@@ -554,7 +562,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
         majors: dMajors.includes('All') ? undefined : dMajors,
         topics: [tName],
         years: dYears.length > 0 ? dYears : undefined,
-        examType: dExamType || undefined,
+        examTypes: dExamType.length > 0 ? dExamType : undefined,
         difficulty: dDifficulty !== 'All' ? dDifficulty : undefined,
         statusFilter: dStatus,
         userId: user.telegramId,
@@ -914,13 +922,17 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
           {/* Exam */}
           {((bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0) || bankId !== 'usmle_bank') && (
             <section className="qb-sec">
-              <div className="qb-sh"><h2>Exam</h2><span className="qb-mono">{selectedExamType || 'All types'}</span></div>
+              <div className="qb-sh"><h2>Exam</h2><span className="qb-mono">{selectedExamTypes.length === 0 ? 'All types' : selectedExamTypes.join(' + ')}</span></div>
               {bankMeta.examTypesAvailable && bankMeta.examTypesAvailable.length > 0 && (
                 <div className="qb-seg">
+                  <button aria-pressed={selectedExamTypes.length === 0} onClick={() => { setSelectedExamTypes([]); setSelectedYears([]); }}>All</button>
                   {bankMeta.examTypesAvailable.map((t) => {
-                    const active = selectedExamType === t;
+                    const active = selectedExamTypes.includes(t);
                     return (
-                      <button key={t} aria-pressed={active} onClick={() => { setSelectedExamType(active ? null : t); setSelectedYears([]); }}>
+                      <button key={t} aria-pressed={active} onClick={() => {
+                        setSelectedExamTypes(active ? selectedExamTypes.filter((x) => x !== t) : [...selectedExamTypes, t]);
+                        setSelectedYears([]);
+                      }}>
                         {t}
                       </button>
                     );
@@ -929,13 +941,13 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
               )}
               {bankId !== 'usmle_bank' && (
                 <div className="qb-chips" style={{ marginTop: 14 }}>
-                  {(selectedExamType && bankMeta.yearsByType ? bankMeta.yearsByType[selectedExamType] || [] : bankMeta.yearsAvailable).map((yr) => (
+                  {yearOptions.map((yr) => (
                     <button key={yr} className="qb-chip" aria-pressed={selectedYears.includes(yr)} onClick={() => toggleYear(yr)}>
                       <span>{yr}</span>
                     </button>
                   ))}
-                  {selectedExamType && bankMeta.yearsByType && (bankMeta.yearsByType[selectedExamType] || []).length === 0 && (
-                    <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>No years yet under {selectedExamType}.</span>
+                  {selectedExamTypes.length > 0 && yearOptions.length === 0 && (
+                    <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>No years yet under {selectedExamTypes.join(' + ')}.</span>
                   )}
                 </div>
               )}
@@ -976,7 +988,7 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({ onNavigate, 
               <li><span>Status</span><span>{selectedStatusFilter === 'ALL' ? 'All questions' : selectedStatusFilter === 'COMPLETE' ? 'Complete' : selectedStatusFilter === 'UNCOMPLETED' ? 'Uncompleted' : 'Unused'}</span></li>
               <li><span>Majors</span><span>{selectedMajorsLabel}</span></li>
               <li><span>Topics</span><span>{selectedTopicsLabel}</span></li>
-              <li><span>Exam</span><span>{selectedExamType || 'All types'}</span></li>
+              <li><span>Exam</span><span>{selectedExamTypes.length === 0 ? 'All types' : selectedExamTypes.join(' + ')}</span></li>
               <li><span>Years</span><span>{selectedYears.length === 0 ? 'All years' : selectedYears.join(', ')}</span></li>
               <li><span>Difficulty</span><span>{selectedDifficulty}</span></li>
             </ul>
