@@ -404,6 +404,9 @@ export const getFilteredQuestions = (filters: BlockFilters): Question[] => {
       if (filters.examType && parsed.type !== filters.examType) {
         return false;
       }
+      if (filters.examTypes && filters.examTypes.length > 0 && (!parsed.type || !filters.examTypes.includes(parsed.type))) {
+        return false;
+      }
       if (
         filters.years &&
         filters.years.length > 0 &&
