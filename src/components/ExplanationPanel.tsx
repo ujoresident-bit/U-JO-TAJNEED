@@ -19,9 +19,6 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({ question, se
   const isCorrect = selectedAnswer === question.correctAnswer;
   const [open, setOpen] = useState<OptionKey | null>(null);
 
-  // Real aggregate stats exist only once somebody has answered this question.
-  const showStats = (stats?.totalAttempts || 0) > 0;
-
   const sections = question.explanation.split(/(?=##\s)/g).map((sec) => sec.trim()).filter(Boolean);
 
   const renderBody = (lines: string[]) =>
@@ -47,28 +44,7 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({ question, se
             ? `Option ${question.correctAnswer} is the correct choice.`
             : `You chose ${selectedAnswer || 'none'}. The correct answer is ${question.correctAnswer}.`}
         </div>
-        {showStats && (
-          <div className="ex-mono ex-vt">
-            {stats.totalAttempts.toLocaleString()} examinees · {stats.distribution[question.correctAnswer] || 0}% chose {question.correctAnswer}
-          </div>
-        )}
       </div>
-
-      {showStats && (
-        <div className="ex-bars" aria-label="How other examinees answered">
-          {KEYS.map((k) => {
-            const pct = stats.distribution[k] || 0;
-            const cls = k === question.correctAnswer ? 'ok' : k === selectedAnswer ? 'bad' : '';
-            return (
-              <div key={k} className={`ex-bar ${cls}`}>
-                <span className="ex-mono">{k}</span>
-                <div><i style={{ width: `${pct}%` }} /></div>
-                <b>{pct}%</b>
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       <div className={`ex-cols ${others.length ? 'two' : ''}`}>
         <div className="ex-why">
