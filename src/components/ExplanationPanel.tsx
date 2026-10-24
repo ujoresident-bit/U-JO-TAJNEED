@@ -1,5 +1,5 @@
-import React from 'react';
-import { BookOpen, CheckCircle2, XCircle, BarChart2, Info } from 'lucide-react';
+import React, { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { Question, QuestionStats, OptionKey } from '../types';
 
 interface ExplanationPanelProps {
@@ -8,186 +8,129 @@ interface ExplanationPanelProps {
   stats: QuestionStats;
 }
 
-export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
-  question,
-  selectedAnswer,
-  stats
-}) => {
+const KEYS = ['A', 'B', 'C', 'D'] as OptionKey[];
+
+const bold = (str: string): React.ReactNode[] =>
+  str.split(/(\*\*.*?\*\*)/g).map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part
+  );
+
+export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({ question, selectedAnswer, stats }) => {
   const isCorrect = selectedAnswer === question.correctAnswer;
+  const [open, setOpen] = useState<OptionKey | null>(null);
 
-  // Simple clean markdown section splitter
-  const renderFormattedExplanation = (text: string) => {
-    const sections = text.split(/(?=##\s)/g);
+  // Real aggregate stats exist only once somebody has answered this question.
+  const showStats = (stats?.totalAttempts || 0) > 0;
 
-    return sections.map((sec, idx) => {
-      const lines = sec.trim().split('\n');
-      const firstLine = lines[0];
+  const sections = question.explanation.split(/(?=##\s)/g).map((sec) => sec.trim()).filter(Boolean);
 
-      if (firstLine.startsWith('## ')) {
-        const title = firstLine.replace('## ', '');
-        const contentLines = lines.slice(1);
-
-        return (
-          <div key={idx} className="space-y-2 pt-2 border-t border-slate-800/80 first:border-none first:pt-0">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{title}</span>
-            </h4>
-            <div className="space-y-1.5 text-xs text-slate-300 leading-relaxed">
-              {contentLines.map((line, lIdx) => {
-                const trimmed = line.trim();
-                if (!trimmed) return null;
-                if (trimmed.startsWith('* ') || trimmed.startsWith('- ')) {
-                  const bulletText = trimmed.substring(2);
-                  return (
-                    <div key={lIdx} className="flex items-start gap-2 pl-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/60 mt-1.5 shrink-0" />
-                      <span>{renderBoldText(bulletText)}</span>
-                    </div>
-                  );
-                }
-                return <p key={lIdx}>{renderBoldText(trimmed)}</p>;
-              })}
-            </div>
-          </div>
-        );
+  const renderBody = (lines: string[]) =>
+    lines.map((line, i) => {
+      const t = line.trim();
+      if (!t) return null;
+      if (t.startsWith('* ') || t.startsWith('- ')) {
+        return <div key={i} className="ex-li"><i />{<span>{bold(t.substring(2))}</span>}</div>;
       }
-
-      return (
-        <div key={idx} className="text-xs text-slate-300 leading-relaxed space-y-1">
-          {lines.map((line, lIdx) => (
-            <p key={lIdx}>{renderBoldText(line)}</p>
-          ))}
-        </div>
-      );
+      return <p key={i}>{bold(t)}</p>;
     });
-  };
 
-  const renderBoldText = (str: string) => {
-    const parts = str.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return (
-          <strong key={i} className="font-bold text-slate-100">
-            {part.slice(2, -2)}
-          </strong>
-        );
-      }
-      return part;
-    });
-  };
+  const others = KEYS.filter((k) => k !== question.correctAnswer && Boolean(question.optionExplanations?.[k]));
 
   return (
-    <div className="rounded-2xl bg-slate-900/95 border border-slate-800 p-5 md:p-6 space-y-5 shadow-xl">
-      {/* Result Status Banner */}
-      <div
-        className={`p-4 rounded-xl border flex items-center gap-3 ${
-          isCorrect
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-            : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-        }`}
-      >
-        {isCorrect ? (
-          <CheckCircle2 className="w-6 h-6 shrink-0" />
-        ) : (
-          <XCircle className="w-6 h-6 shrink-0" />
-        )}
+    <section className="ex-exp" aria-label="Explanation">
+      <style>{EXP_CSS}</style>
 
-        <div>
-          <div className="font-extrabold text-sm">
-            {isCorrect ? 'Correct Answer!' : 'Incorrect Answer'}
-          </div>
-          <div className="text-xs opacity-90">
-            {isCorrect
-              ? `Option ${question.correctAnswer} is the correct choice.`
-              : `Your selection: ${selectedAnswer || 'None'}. Correct answer: ${question.correctAnswer}`}
-          </div>
+      <div className="ex-verdict">
+        <h3 className={isCorrect ? 'ok' : 'bad'}>{isCorrect ? 'Correct' : 'Incorrect'}</h3>
+        <div className="ex-vs">
+          {isCorrect
+            ? `Option ${question.correctAnswer} is the correct choice.`
+            : `You chose ${selectedAnswer || 'none'}. The correct answer is ${question.correctAnswer}.`}
         </div>
+        {showStats && (
+          <div className="ex-mono ex-vt">
+            {stats.totalAttempts.toLocaleString()} examinees · {stats.distribution[question.correctAnswer] || 0}% chose {question.correctAnswer}
+          </div>
+        )}
       </div>
 
-      {/* Aggregate Community Answer Statistics */}
-      <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-        <div className="flex items-center justify-between text-xs text-slate-400 font-semibold border-b border-slate-800/80 pb-2">
-          <span className="flex items-center gap-1.5 text-slate-300">
-            <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Aggregate Answer Statistics</span>
-          </span>
-          <span className="text-[11px] text-slate-400">{stats.totalAttempts.toLocaleString()} examinees</span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {(['A', 'B', 'C', 'D'] as OptionKey[]).map((optKey) => {
-            const pct = stats.distribution[optKey] || 0;
-            const isCorrectOption = optKey === question.correctAnswer;
-            const isUserOption = optKey === selectedAnswer;
-
+      {showStats && (
+        <div className="ex-bars" aria-label="How other examinees answered">
+          {KEYS.map((k) => {
+            const pct = stats.distribution[k] || 0;
+            const cls = k === question.correctAnswer ? 'ok' : k === selectedAnswer ? 'bad' : '';
             return (
-              <div
-                key={optKey}
-                className={`p-2.5 rounded-lg border text-xs space-y-1 ${
-                  isCorrectOption
-                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
-                    : isUserOption
-                    ? 'bg-rose-500/10 border-rose-500/40 text-rose-300'
-                    : 'bg-slate-900 border-slate-800 text-slate-400'
-                }`}
-              >
-                <div className="flex justify-between items-center font-bold">
-                  <span>Option {optKey}</span>
-                  <span className="text-slate-100">{pct}%</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-300 ${
-                      isCorrectOption ? 'bg-emerald-400' : isUserOption ? 'bg-rose-400' : 'bg-slate-600'
-                    }`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
+              <div key={k} className={`ex-bar ${cls}`}>
+                <span className="ex-mono">{k}</span>
+                <div><i style={{ width: `${pct}%` }} /></div>
+                <b>{pct}%</b>
               </div>
             );
           })}
         </div>
-      </div>
+      )}
 
-      {/* Main Formatted Explanation */}
-      <div className="space-y-4">{renderFormattedExplanation(question.explanation)}</div>
+      <div className={`ex-cols ${others.length ? 'two' : ''}`}>
+        <div className="ex-why">
+          {sections.map((sec, idx) => {
+            const lines = sec.split('\n');
+            const isHead = lines[0].startsWith('## ');
+            return (
+              <div className="ex-sec" key={idx}>
+                {isHead && <div className="ex-mono ex-h">{lines[0].replace(/^##\s*/, '')}</div>}
+                {renderBody(isHead ? lines.slice(1) : lines)}
+              </div>
+            );
+          })}
+        </div>
 
-      {/* Option Explanations Section for Incorrect Choices */}
-      {question.optionExplanations &&
-        Object.keys(question.optionExplanations).some(
-          (k) => k !== question.correctAnswer && Boolean(question.optionExplanations?.[k as OptionKey])
-        ) && (
-          <div className="pt-4 border-t border-slate-800 space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5 text-amber-400" />
-              <span>Why the other options are incorrect</span>
-            </h4>
-
-            <div className="space-y-2.5">
-              {(['A', 'B', 'C', 'D'] as OptionKey[])
-                .filter((k) => k !== question.correctAnswer && Boolean(question.optionExplanations?.[k]))
-                .map((k) => (
-                  <div
-                    key={k}
-                    className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 space-y-1 text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-lg bg-slate-800 text-slate-300 font-bold flex items-center justify-center shrink-0 text-[11px]">
-                        {k}
-                      </span>
-                      <span className="font-semibold text-slate-200">
-                        {question.options[k]}
-                      </span>
-                    </div>
-                    <p className="text-slate-400 pl-7 text-[11px] leading-relaxed">
-                      {question.optionExplanations![k]}
-                    </p>
-                  </div>
-                ))}
-            </div>
+        {others.length > 0 && (
+          <div className="ex-oth">
+            <div className="ex-mono ex-h am">Why the other options are incorrect</div>
+            {others.map((k) => (
+              <div key={k} className={`ex-acc ${open === k ? 'open' : ''}`}>
+                <button onClick={() => setOpen(open === k ? null : k)} aria-expanded={open === k}>
+                  <span className="ex-mono">{k}</span>
+                  <b>{question.options[k]}</b>
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                {open === k && <p>{question.optionExplanations![k]}</p>}
+              </div>
+            ))}
           </div>
         )}
-    </div>
+      </div>
+    </section>
   );
 };
+
+const EXP_CSS = `
+.ex-exp{margin-top:34px;padding-top:26px;border-top:1px solid rgba(207,239,248,.1);color:#DCE6EF;font-family:'Geist','Inter',system-ui,sans-serif}
+.ex-exp .ex-mono{font:500 10.5px 'Geist Mono',ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase}
+.ex-verdict h3{margin:0;font:400 clamp(38px,5vw,60px)/1 'Instrument Serif',Georgia,serif}
+.ex-verdict h3.ok{color:#6FE0B4}.ex-verdict h3.bad{color:#FF8FA3}
+.ex-vs{margin-top:8px;font-size:15px;color:#A9B8C8}
+.ex-vt{margin-top:8px;color:#93A3B6}
+.ex-bars{display:grid;gap:8px;margin-top:20px;max-width:520px}
+.ex-bar{display:grid;grid-template-columns:18px 1fr 42px;align-items:center;gap:10px;color:#93A3B6}
+.ex-bar>div{height:6px;border-radius:6px;background:rgba(207,239,248,.08);overflow:hidden}
+.ex-bar i{display:block;height:100%;border-radius:6px;background:rgba(207,239,248,.35)}
+.ex-bar.ok i{background:#6FE0B4}.ex-bar.bad i{background:#FF8FA3}
+.ex-bar.ok,.ex-bar.ok b{color:#8FEAC6}.ex-bar.bad,.ex-bar.bad b{color:#FFA9B8}
+.ex-bar b{font:500 12px 'Geist Mono',ui-monospace,monospace;text-align:right;font-variant-numeric:tabular-nums}
+.ex-cols{display:grid;gap:34px;margin-top:30px}
+@media(min-width:1100px){.ex-cols.two{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:48px}}
+.ex-h{color:#4FD6EC;margin-bottom:10px}.ex-h.am{color:#E8B66A;margin-bottom:12px}
+.ex-sec{margin-bottom:26px}
+.ex-sec p{margin:0 0 10px;font-size:calc(16px*var(--fs,1));line-height:1.7;color:#CBD7E3}
+.ex-sec strong{color:#EAF1F7;font-weight:600}
+.ex-li{display:flex;gap:12px;margin:0 0 9px;font-size:calc(16px*var(--fs,1));line-height:1.65;color:#CBD7E3}
+.ex-li i{flex:none;width:6px;height:6px;border-radius:50%;background:#4FD6EC;margin-top:.7em;opacity:.75}
+.ex-acc{border:1px solid rgba(207,239,248,.1);border-radius:16px;background:rgba(207,239,248,.025);margin-bottom:8px;overflow:hidden}
+.ex-acc button{width:100%;display:flex;align-items:center;gap:12px;padding:13px 14px;background:none;border:0;color:#DCE6EF;text-align:left;cursor:pointer;font-family:inherit}
+.ex-acc button .ex-mono{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(207,239,248,.2);color:#93A3B6;letter-spacing:0}
+.ex-acc button b{flex:1;min-width:0;font-weight:500;font-size:15px}
+.ex-acc button svg{flex:none;color:#93A3B6;transition:transform .25s}.ex-acc.open button svg{transform:rotate(180deg)}
+.ex-acc p{margin:0;padding:0 16px 16px 50px;font-size:calc(14.5px*var(--fs,1));line-height:1.65;color:#A9B8C8}
+@media(prefers-reduced-motion:reduce){.ex-acc button svg{transition:none}}
+`;
