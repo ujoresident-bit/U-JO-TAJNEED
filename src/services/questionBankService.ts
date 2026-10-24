@@ -1670,12 +1670,15 @@ export const setQuestionFlag = (blockId: string, questionId: string, flagged: bo
   return block;
 };
 
-export const endBlock = (blockId: string, action: 'save' | 'finish'): Block => {
+export const endBlock = (blockId: string, action: 'save' | 'finish', elapsedSeconds: number = 0): Block => {
   const blocks = getStoredBlocks();
   const block = blocks[blockId];
   if (!block) throw new Error('Block not found');
 
   const now = new Date().toISOString();
+  if (elapsedSeconds > 0) {
+    block.timeSpentSeconds = (block.timeSpentSeconds || 0) + Math.round(elapsedSeconds);
+  }
   if (action === 'save') {
     block.status = 'SAVED';
     block.updatedAt = now;
