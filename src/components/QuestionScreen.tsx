@@ -32,6 +32,7 @@ import { ExplanationPanel } from './ExplanationPanel';
 import { ExamHelix, HelixState } from './ExamHelix';
 import { ExamLabsDrawer } from './ExamLabsDrawer';
 import { EndBlockModal } from './EndBlockModal';
+import type { StripItem } from './ResultStrip';
 import { FeedbackButton } from './FeedbackButton';
 import { QuestionVideos } from './QuestionVideos';
 import { BlockSummaryView } from './BlockSummaryView';
@@ -53,7 +54,8 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
   reviewMode
 }) => {
   const [block, setBlock] = useState<Block | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [allQuestions, setAllQuestions] = useState<Question[]>([]);
+  const [reviewFilter, setReviewFilter] = useState<'incorrect' | 'flagged' | null>(reviewMode === 'incorrect' ? 'incorrect' : null);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [showDna, setShowDna] = useState<boolean>(() => lsGet('ujo_dna') !== '0');
   const [fsIdx, setFsIdx] = useState<number>(() => { const n = parseInt(lsGet('ujo_fs') || '1', 10); return n >= 0 && n < FS_STEPS.length ? n : 1; });
@@ -64,6 +66,15 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
   const [qSec, setQSec] = useState<number>(0);
   const [showEndModal, setShowEndModal] = useState<boolean>(false);
   const [isCompletedView, setIsCompletedView] = useState<boolean>(false);
+
+  // In review, "incorrect" / "flagged" narrow the list to those questions.
+  const questions = React.useMemo(() => {
+    if (!reviewFilter || !block) return allQuestions;
+    const list = allQuestions.filter((q) =>
+      reviewFilter === 'incorrect' ? block.answers[q.id] && !block.answers[q.id].isCorrect : Boolean(block.annotations[q.id]?.flagged)
+    );
+    return list.length > 0 ? list : allQuestions;
+  }, [allQuestions, reviewFilter, block]);
 
   // Local state for current question highlights & struck options
   const [highlights, setHighlights] = useState<HighlightRange[]>([]);
@@ -94,7 +105,7 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
         const q = getQuestionById(id);
         if (q) qList.push(q);
       });
-      setQuestions(qList);
+      setAllQuestions(qList);
 
       if (loadedBlock.status === 'COMPLETED' && !reviewMode) {
         setIsCompletedView(true);
@@ -202,9 +213,10 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
       <BlockSummaryView
         block={block}
         questions={questions}
-        onReviewBlock={(mode) => {
+        onReviewBlock={(mode, index) => {
+          setReviewFilter(mode === 'incorrect' || mode === 'flagged' ? mode : null);
           setIsCompletedView(false);
-          setCurrentIndex(0);
+          setCurrentIndex(mode === 'all' && typeof index === 'number' ? index : 0);
         }}
         onNavigate={onNavigate}
       />
@@ -297,12 +309,12 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
 
   // End Block Handlers
   const handleSaveAndExit = () => {
-    endBlock(block.id, 'save');
+    endBlock(block.id, 'save', blockSec);
     onNavigate('back');
   };
 
   const handleFinishBlock = () => {
-    const finished = endBlock(block.id, 'finish');
+    const finished = endBlock(block.id, 'finish', blockSec);
     setBlock({ ...finished });
     setIsCompletedView(true);
     setShowEndModal(false);
@@ -344,7 +356,7 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
     return result;
   };
 
-  const answeredCount = Object.keys(block.answers).length;
+  const answeredCount = questions.filter((q) => block.answers[q.id]).length;
 
 
   const pct = ((currentIndex + 1) / questions.length) * 100;
@@ -538,6 +550,16 @@ export const QuestionScreen: React.FC<QuestionScreenProps> = ({
           onCancel={() => setShowEndModal(false)}
           answeredCount={answeredCount}
           totalQuestions={questions.length}
+          items={questions.map((q) => {
+            const a = block.answers[q.id];
+            return { s: a ? (a.isCorrect ? 'ok' : 'bad') : null, f: Boolean(block.annotations[q.id]?.flagged) } as StripItem;
+          })}
+          flaggedCount={questions.filter((q) => block.annotations[q.id]?.flagged).length}
+          onReviewFlagged={() => {
+            const i = questions.findIndex((q) => block.annotations[q.id]?.flagged);
+            if (i >= 0) handleSelectIndex(i);
+            setShowEndModal(false);
+          }}
         />
       )}
     </div>
