@@ -102,7 +102,8 @@ export interface BlockFilters {
   majors?: string[];
   topics?: string[];
   years?: (number | string)[];
-  examType?: string; // 'TAJNEED' | 'MADANI' — exam type filter, separate from years
+  examType?: string; // legacy single exam type
+  examTypes?: string[]; // 'TAJNEED' | 'MADANI' — one or both; empty/undefined = all
   difficulty?: string;
   questionCount?: number;
   statusFilter?: QuestionStatusFilter;
