@@ -1325,14 +1325,36 @@ export const reportQuestionIssue = async (questionId: string, message?: string):
   throw new Error(data.error || 'Failed to submit question feedback.');
 };
 
+// TEMPORARY: until real per-option answer counts are collected, questions with no
+// recorded stats get a stable, made-up distribution (same numbers every time for
+// the same question). Set to false to hide percentages when there is no real data.
+export const USE_PLACEHOLDER_STATS = true;
+
+const placeholderStats = (questionId: string, correct?: OptionKey): QuestionStats => {
+  let h = 2166136261;
+  for (let i = 0; i < questionId.length; i++) { h ^= questionId.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  const rnd = () => { h ^= h << 13; h >>>= 0; h ^= h >>> 17; h ^= h << 5; h >>>= 0; return h / 4294967296; };
+  const keys: OptionKey[] = ['A', 'B', 'C', 'D'];
+  const right: OptionKey = correct || keys[Math.floor(rnd() * 4)];
+  const top = 42 + Math.round(rnd() * 33); // 42-75% pick the correct option
+  const others = keys.filter((k) => k !== right);
+  const w = others.map(() => 0.5 + rnd());
+  const sum = w.reduce((a, b) => a + b, 0);
+  const dist: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, E: 0 };
+  dist[right] = top;
+  let left = 100 - top;
+  others.forEach((k, i) => {
+    const v = i === others.length - 1 ? left : Math.round(((100 - top) * w[i]) / sum);
+    dist[k] = Math.max(0, Math.min(left, v));
+    left -= dist[k];
+  });
+  return { questionId, distribution: dist as QuestionStats['distribution'], totalAttempts: 300 + Math.floor(rnd() * 2200) };
+};
+
 export const getQuestionStats = (questionId: string): QuestionStats => {
-  return (
-    DEMO_QUESTION_STATS[questionId] || {
-      questionId,
-      distribution: { A: 25, B: 25, C: 25, D: 25, E: 0 },
-      totalAttempts: 0
-    }
-  );
+  if (DEMO_QUESTION_STATS[questionId]) return DEMO_QUESTION_STATS[questionId];
+  if (USE_PLACEHOLDER_STATS) return placeholderStats(questionId, getQuestionById(questionId)?.correctAnswer);
+  return { questionId, distribution: { A: 0, B: 0, C: 0, D: 0, E: 0 }, totalAttempts: 0 };
 };
 
 // Remembers which version (updatedAt) of each block the account already has,
